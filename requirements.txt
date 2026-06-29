@@ -1,0 +1,30 @@
+# Clinic Manager — dependências de produção e desenvolvimento
+#
+# Instale com: pip install -r requirements.txt
+#
+# As versões estão fixadas (==) para garantir builds reprodutíveis do
+# executável (PyInstaller/Nuitka). Ao atualizar uma dependência, teste
+# o empacotamento completo antes de fixar a nova versão aqui.
+
+# --- Interface gráfica ---
+PySide6==6.11.1
+
+# --- Banco de dados / ORM ---
+SQLAlchemy==2.0.51
+
+# --- Validação de dados (DTOs / schemas) ---
+pydantic==2.13.4
+
+# --- Parsing de documentos ---
+pypdf==5.9.0
+python-docx==1.2.0
+
+# --- Manipulação de imagens (assets, ícones) ---
+Pillow==12.1.1
+
+# --- Testes (não necessário no executável final, apenas em desenvolvimento) ---
+pytest==9.1.1
+
+# --- Empacotamento (instalar apenas no ambiente de build, não em produção) ---
+# pyinstaller==6.11.1
+# nuitka==2.6.5
