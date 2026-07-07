@@ -107,9 +107,11 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.screen_fichas)
         self.stack.addWidget(self.screen_config)
 
-        # =========================================================================
-        # 🔄 ALIMENTAÇÃO DA BARRA DE PESQUISA DA AGENDA COM OS PACIENTES EXISTENTES
-        # =========================================================================
+        # Atualiza as sugestões da agenda com base no banco SQL carregado
+        self.atualizar_sugestoes_agenda()
+
+    def atualizar_sugestoes_agenda(self):
+        """Alimenta a barra de sugestões da agenda com os nomes vindos da tabela."""
         nomes_iniciais = []
         for r in range(self.screen_pacientes.table.rowCount()):
             item_nome = self.screen_pacientes.table.item(r, 0)
@@ -117,12 +119,15 @@ class MainWindow(QMainWindow):
                 nomes_iniciais.append(item_nome.text())
         
         self.screen_agenda.atualizar_lista_sugestoes(nomes_iniciais)
-        # =========================================================================
 
     def mudar_tela(self, destino_widget, botao_clicado):
         self.stack.setCurrentWidget(destino_widget)
         for btn in [self.btn_home, self.btn_pacientes, self.btn_agenda, self.btn_fichas, self.btn_config]:
             btn.setChecked(btn == botao_clicado)
+            
+        # Se o usuário clicar na tela da agenda, recarrega a lista de nomes atualizada para o autocompletar
+        if destino_widget == self.screen_agenda:
+            self.atualizar_sugestoes_agenda()
 
     def ir_para_tela_pacientes(self):
         self.mudar_tela(self.screen_pacientes, self.btn_pacientes)

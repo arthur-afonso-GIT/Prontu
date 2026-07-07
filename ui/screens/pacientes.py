@@ -1,3 +1,4 @@
+import sqlite3
 import webbrowser
 import urllib.parse
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
@@ -9,7 +10,11 @@ class PacientesScreen(QWidget):
     def __init__(self):
         super().__init__()
         
+        # Inicializa o Banco de Dados SQL local
+        self.init_db()
+        
         # Variável de controle para saber se estamos editando alguém (-1 significa Novo Cadastro)
+        self.id_em_edicao = -1
         self.row_em_edicao = -1
         
         # Layout Principal (Horizontal: Listagem à esquerda, Cadastro à direita)
@@ -37,12 +42,18 @@ class PacientesScreen(QWidget):
             }
             QLineEdit:focus { border: 1px solid #0284c7; }
         """)
-        # Vincula a digitação ao filtro em tempo real
-        self.search_input.textChanged.connect(self.filtrar_tabela)
+        self.search_input.textChanged.connect(self.carregar_pacientes_db)
         
         self.folder_filter = QComboBox()
-        # Vincula a mudança de pasta ao filtro em tempo real
-        self.folder_filter.currentIndexChanged.connect(self.filtrar_tabela)
+        self.folder_filter.setStyleSheet("""
+            QComboBox {
+                padding: 10px 15px; font-size: 14px; 
+                border: 1px solid #cbd5e1; border-radius: 6px; 
+                background-color: white; color: #334155;
+            }
+            QComboBox::drop-down { border: none; padding-right: 10px; }
+        """)
+        self.folder_filter.currentIndexChanged.connect(self.carregar_pacientes_db)
         
         filter_layout.addWidget(self.search_input, stretch=3)
         filter_layout.addWidget(self.folder_filter, stretch=1)
@@ -50,21 +61,22 @@ class PacientesScreen(QWidget):
         
         # Tabela de Pacientes
         self.table = QTableWidget()
-        self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["Nome", "Telefone", "Idade", "Convênio", "Pasta", "Ações"])
+        self.table.setColumnCount(7)  # 7 colunas para incluir o ID oculto do banco
+        self.table.setHorizontalHeaderLabels(["Nome", "Telefone", "Idade", "Convênio", "Pasta", "Ações", "ID"])
+        self.table.setColumnHidden(6, True) # Oculta o ID numérico
         
         # Ajuste Fixo e Seguro para as colunas não cortarem o botão do Whats
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Nome expande
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)  # Telefone livre
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents) # Idade compacta
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)  # Convênio livre
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents) # Pasta compacta
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)  # Ações travado
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
         
-        self.table.setColumnWidth(1, 130)  # Largura Telefone
-        self.table.setColumnWidth(3, 110)  # Largura Convênio
-        self.table.setColumnWidth(5, 100)  # Espaço ideal apenas para o botão "Whats"
+        self.table.setColumnWidth(1, 130)
+        self.table.setColumnWidth(3, 110)
+        self.table.setColumnWidth(5, 100)
         
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -84,7 +96,6 @@ class PacientesScreen(QWidget):
             }
         """)
         
-        # VÍNCULO DE DUPLO CLIQUE NA LINHA
         self.table.cellDoubleClicked.connect(self.ao_dar_double_click)
         self.table.setRowCount(0)
         
@@ -102,7 +113,6 @@ class PacientesScreen(QWidget):
         form_layout.setContentsMargins(20, 20, 20, 20)
         form_layout.setSpacing(12)
         
-        # Título do Formulário Dinâmico
         self.form_title = QLabel("Novo Cadastro / Ficha")
         self.form_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #0f172a; margin-bottom: 5px;")
         form_layout.addWidget(self.form_title)
@@ -172,7 +182,6 @@ class PacientesScreen(QWidget):
         self.apply_form_styles()
         form_layout.addStretch()
         
-        # Botão de Ação do Formulário
         self.btn_salvar = QPushButton("Salvar Ficha e Paciente")
         self.btn_salvar.setStyleSheet("""
             QPushButton { background-color: #0284c7; color: white; padding: 12px; font-weight: bold; border-radius: 6px; border: none; font-size: 14px;}
@@ -183,6 +192,79 @@ class PacientesScreen(QWidget):
         
         main_layout.addWidget(left_container, stretch=3)
         main_layout.addWidget(self.form_container, stretch=1)
+        
+        self.carregar_pacientes_db()
+
+    def init_db(self):
+        conn = sqlite3.connect("consultorio.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pacientes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nome TEXT NOT NULL,
+                telefone TEXT,
+                nascimento TEXT,
+                convenio TEXT,
+                sexo TEXT,
+                endereco TEXT,
+                pasta TEXT,
+                queixa_principal TEXT
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+    def carregar_pacientes_db(self):
+        if self.folder_filter.count() == 0:
+            return
+
+        texto_busca = self.search_input.text().strip().upper()
+        pasta_selecionada = self.folder_filter.currentText()
+
+        conn = sqlite3.connect("consultorio.db")
+        cursor = conn.cursor()
+
+        query = "SELECT id, nome, telefone, nascimento, convenio, pasta FROM pacientes WHERE 1=1"
+        parametros = []
+
+        if texto_busca:
+            query += " AND (nome LIKE ? OR telefone LIKE ?)"
+            parametros.append(f"%{texto_busca}%")
+            parametros.append(f"%{texto_busca}%")
+
+        if pasta_selecionada and pasta_selecionada != "📂 Todos os Pacientes":
+            query += " AND pasta = ?"
+            parametros.append(pasta_selecionada)
+
+        query += " ORDER BY nome ASC"
+        cursor.execute(query, parametros)
+        linhas = cursor.fetchall()
+        conn.close()
+
+        self.table.setRowCount(0)
+        hoje = QDate.currentDate()
+
+        for dados in linhas:
+            id_db, nome, tel, nasc_str, convenio, pasta = dados
+            
+            idade_anos = ""
+            try:
+                dia, mes, ano = map(int, nasc_str.split("/"))
+                data_nasc = QDate(ano, mes, dia)
+                idade_anos = str(data_nasc.daysTo(hoje) // 365)
+            except:
+                pass
+
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+
+            self.table.setItem(row, 0, self.format_row_item(nome.upper()))
+            self.table.setItem(row, 1, self.format_row_item(tel))
+            self.table.setItem(row, 2, self.format_row_item(idade_anos, center=True))
+            self.table.setItem(row, 3, self.format_row_item(convenio.upper()))
+            self.table.setItem(row, 4, self.format_row_item(pasta, center=True))
+            self.table.setCellWidget(row, 5, self.create_action_buttons(tel))
+            self.table.setItem(row, 6, QTableWidgetItem(str(id_db)))
 
     def calculate_age(self, date):
         hoje = QDate.currentDate()
@@ -200,7 +282,6 @@ class PacientesScreen(QWidget):
         return item
 
     def create_action_buttons(self, tel):
-        """Gera apenas o botão do WhatsApp na coluna de Ações."""
         actions_widget = QWidget()
         actions_layout = QHBoxLayout(actions_widget)
         actions_layout.setContentsMargins(5, 2, 5, 2)
@@ -217,17 +298,26 @@ class PacientesScreen(QWidget):
         return actions_widget
 
     def ao_dar_double_click(self, row, column):
-        """Gatilho automático disparado ao clicar duas vezes em qualquer célula da linha."""
         self.carregar_para_edicao(row)
 
     def carregar_para_edicao(self, row_index):
-        """Coleta os dados atuais da tabela e preenche o formulário para edição."""
         if row_index < 0:
             return
             
         self.row_em_edicao = row_index
+        self.id_em_edicao = int(self.table.item(row_index, 6).text())
         
-        # Updates visual elements of form to Edit mode (Yellow Color)
+        conn = sqlite3.connect("consultorio.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT nome, telefone, nascimento, convenio, sexo, endereco, pasta, queixa_principal FROM pacientes WHERE id = ?", (self.id_em_edicao,))
+        dados = cursor.fetchone()
+        conn.close()
+
+        if not dados:
+            return
+
+        nome, tel, nascimento, convenio, sexo, endereco, pasta, qp = dados
+
         self.form_title.setText("✏️ Editar Cadastro / Ficha")
         self.btn_salvar.setText("Atualizar Ficha")
         self.btn_salvar.setStyleSheet("""
@@ -235,58 +325,61 @@ class PacientesScreen(QWidget):
             QPushButton:hover { background-color: #ca8a04; }
         """)
 
-        # Coleta os textos da linha selecionada com segurança
-        nome = self.table.item(row_index, 0).text() if self.table.item(row_index, 0) else ""
-        tel = self.table.item(row_index, 1).text() if self.table.item(row_index, 1) else ""
-        convenio = self.table.item(row_index, 3).text() if self.table.item(row_index, 3) else ""
-        pasta = self.table.item(row_index, 4).text() if self.table.item(row_index, 4) else ""
-        
-        # Preenche os campos editáveis
         self.input_nome.setText(nome)
         self.input_tel.setText(tel)
         self.input_convenio.setText(convenio)
+        self.input_endereco.setText(endereco)
+        self.input_qp.setText(qp)
         
-        # Localiza a pasta correta no combobox
+        index_sexo = self.input_sexo.findText(sexo)
+        if index_sexo >= 0:
+            self.input_sexo.setCurrentIndex(index_sexo)
+
         index_pasta = self.input_pasta.findText(pasta)
         if index_pasta >= 0:
             self.input_pasta.setCurrentIndex(index_pasta)
             
-        # Simulação em memória no protótipo para campos adicionais
-        self.input_endereco.setText("Endereço resgatado via duplo clique...")
-        self.input_qp.setText("Queixa principal carregada via duplo clique...")
+        try:
+            dia, mes, ano = map(int, nascimento.split("/"))
+            self.input_nasc.setDate(QDate(ano, mes, dia))
+        except:
+            self.input_nasc.setDate(QDate(1980, 1, 1))
 
     def salvar_paciente_click(self):
-        """Gerencia se salva um novo registro ou se atualiza uma linha existente."""
         nome = self.input_nome.text().strip()
         tel = self.input_tel.text().strip()
-        idade = self.label_idade.text().replace(" anos", "")
+        nascimento = self.input_nasc.date().toString("dd/MM/yyyy")
         convenio = self.input_convenio.text().strip() or "Particular"
+        sexo = self.input_sexo.currentText()
+        endereco = self.input_endereco.text().strip()
         pasta = self.input_pasta.currentText()
+        qp = self.input_qp.toPlainText().strip()
         
         if not nome:
             self.input_nome.setPlaceholderText("⚠️ O Nome é obrigatório!")
             return
             
-        if self.row_em_edicao == -1:
-            # MODO: NOVO CADASTRO
-            target_row = self.table.rowCount()
-            self.table.insertRow(target_row)
-        else:
-            # MODO: EDIÇÃO DE PACIENTE EXISTENTE
-            target_row = self.row_em_edicao
+        conn = sqlite3.connect("consultorio.db")
+        cursor = conn.cursor()
 
-        # Insere ou atualiza os dados na tabela
-        self.table.setItem(target_row, 0, self.format_row_item(nome.upper()))
-        self.table.setItem(target_row, 1, self.format_row_item(tel))
-        self.table.setItem(target_row, 2, self.format_row_item(idade, center=True))
-        self.table.setItem(target_row, 3, self.format_row_item(convenio.upper()))
-        self.table.setItem(target_row, 4, self.format_row_item(pasta, center=True))
+        if self.id_em_edicao == -1:
+            cursor.execute("""
+                INSERT INTO pacientes (nome, telefone, nascimento, convenio, sexo, endereco, pasta, queixa_principal)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (nome, tel, nascimento, convenio, sexo, endereco, pasta, qp))
+        else:
+            cursor.execute("""
+                UPDATE pacientes 
+                SET nome=?, telefone=?, nascimento=?, convenio=?, sexo=?, endereco=?, pasta=?, queixa_principal=?
+                WHERE id=?
+            """, (nome, tel, nascimento, convenio, sexo, endereco, pasta, qp, self.id_em_edicao))
+            
+        conn.commit()
+        conn.close()
+
+        self.carregar_pacientes_db()
         
-        # Atualiza o botão do WhatsApp
-        actions = self.create_action_buttons(tel)
-        self.table.setCellWidget(target_row, 5, actions)
-        
-        # Limpar Campos e Restaurar Estado Original do Formulário
+        self.id_em_edicao = -1
         self.row_em_edicao = -1
         self.form_title.setText("Novo Cadastro / Ficha")
         self.btn_salvar.setText("Salvar Ficha e Paciente")
@@ -300,9 +393,7 @@ class PacientesScreen(QWidget):
         self.input_convenio.clear()
         self.input_endereco.clear()
         self.input_qp.clear()
-        
-        # Dispara o filtro para reposicionar se o paciente trocou de pasta
-        self.filtrar_tabela()
+        self.input_nasc.setDate(QDate(1980, 1, 1))
 
     def open_whatsapp(self, telefone):
         num_limpo = "".join(filter(str.isdigit, telefone))
@@ -314,9 +405,8 @@ class PacientesScreen(QWidget):
 
     def apply_form_styles(self):
         widgets = [self.input_nome, self.input_tel, self.input_nasc, self.input_convenio, 
-                   self.input_endereco, self.input_qp]
+                   self.input_sexo, self.input_endereco, self.input_pasta, self.input_qp]
         
-        # Estilo para os campos editáveis comuns
         for w in widgets:
             w.setStyleSheet("""
                 QLineEdit, QDateEdit, QTextEdit {
@@ -334,59 +424,38 @@ class PacientesScreen(QWidget):
                 }
             """)
 
-        # Estilo específico e blindado para todos os QComboBox (Incluindo os dropdowns ocultos)
         combobox_style = """
             QComboBox {
                 padding: 8px; 
                 border: 1px solid #cbd5e1; 
                 border-radius: 6px; 
-                background-color: white; 
+                background-color: #f8fafc; 
                 color: #0f172a; 
                 font-size: 13px;
             }
             QComboBox:focus { 
                 border: 1px solid #0284c7; 
+                background-color: white;
             }
             QComboBox QAbstractItemView {
                 background-color: white;
                 color: #0f172a;
                 border: 1px solid #cbd5e1;
-                selection-background-color: #f1f5f9;
-                selection-color: #0284c7;
+                selection-background-color: #0284c7;
+                selection-color: white;
                 padding: 4px;
             }
         """
-        
         self.input_sexo.setStyleSheet(combobox_style)
         self.input_pasta.setStyleSheet(combobox_style)
-        
-        # Estiliza o filtro superior esquerdo também para ficar idêntico e blindado
-        self.folder_filter.setStyleSheet("""
-            QComboBox {
-                padding: 10px 15px; font-size: 14px; 
-                border: 1px solid #cbd5e1; border-radius: 6px; 
-                background-color: white; color: #0f172a;
-            }
-            QComboBox::drop-down { border: none; padding-right: 10px; }
-            QComboBox QAbstractItemView {
-                background-color: white;
-                color: #0f172a;
-                border: 1px solid #cbd5e1;
-                selection-background-color: #f1f5f9;
-                selection-color: #0284c7;
-                padding: 4px;
-            }
-        """)
             
     def preencher_formulario_via_importacao(self, dados):
-        """Recebe dados extraídos de arquivos externos e alimenta os inputs visuais automaticamente."""
         self.input_nome.setText(dados.get("nome", ""))
         self.input_tel.setText(dados.get("telefone", ""))
         self.input_convenio.setText(dados.get("convenio", "PARTICULAR"))
         self.input_endereco.setText(dados.get("endereco", ""))
         self.input_qp.setText(dados.get("qp", ""))
         
-        # Conversão e tratamento da Data de Nascimento
         str_data = dados.get("nascimento", "")
         try:
             dia, mes, ano = map(int, str_data.split("/"))
@@ -395,64 +464,17 @@ class PacientesScreen(QWidget):
             self.input_nasc.setDate(QDate(1980, 1, 1))
 
     def atualizar_combobox_pastas(self, lista_pastas):
-        """Reconstrói os filtros e dropdowns baseando-se na lista global síncrona."""
-        # Salva a seleção atual para restaurar após atualizar a lista
-        current_filter = self.folder_filter.currentText()
-        current_input = self.input_pasta.currentText()
-
-        # 1. Atualiza o filtro de buscas superior da tabela
-        self.folder_filter.blockSignals(True)
         self.folder_filter.clear()
         self.folder_filter.addItem("📂 Todos os Pacientes")
         for p in lista_pastas:
             self.folder_filter.addItem(p)
-        
-        idx_f = self.folder_filter.findText(current_filter)
-        if idx_f >= 0: self.folder_filter.setCurrentIndex(idx_f)
-        self.folder_filter.blockSignals(False)
             
-        # 2. Atualiza o seletor interno do formulário de cadastro
-        self.input_pasta.blockSignals(True)
         self.input_pasta.clear()
         self.input_pasta.addItems(lista_pastas)
         
-        idx_i = self.input_pasta.findText(current_input)
-        if idx_i >= 0: self.input_pasta.setCurrentIndex(idx_i)
-        self.input_pasta.blockSignals(False)
-        
-        self.filtrar_tabela()
+        self.carregar_pacientes_db()
             
     def filtrar_por_pasta_externo(self, nome_pasta):
-        """Muda o combo box de filtro superior para a pasta selecionada na Home."""
         index = self.folder_filter.findText(nome_pasta)
         if index >= 0:
             self.folder_filter.setCurrentIndex(index)
-
-    def filtrar_tabela(self):
-        """Filtra a QTableWidget cruzando o texto de busca com a pasta selecionada."""
-        texto_busca = self.search_input.text().strip().lower()
-        pasta_selecionada = self.folder_filter.currentText()
-        
-        for row in range(self.table.rowCount()):
-            item_nome = self.table.item(row, 0)
-            item_tel = self.table.item(row, 1)
-            item_pasta = self.table.item(row, 4)
-            
-            nome = item_nome.text().lower() if item_nome else ""
-            tel = item_tel.text().lower() if item_tel else ""
-            pasta_do_paciente = item_pasta.text() if item_pasta else ""
-            
-            # Condição 1: Valida o termo de busca (no nome ou telefone)
-            corresponde_busca = (texto_busca in nome) or (texto_busca in tel)
-            
-            # Condição 2: Valida a pasta selecionada
-            if pasta_selecionada == "📂 Todos os Pacientes" or not pasta_selecionada:
-                corresponde_pasta = True
-            else:
-                corresponde_pasta = (pasta_do_paciente == pasta_selecionada)
-                
-            # Exibe a linha se passar em ambos os filtros; senão, esconde
-            if corresponde_busca and corresponde_pasta:
-                self.table.setRowHidden(row, False)
-            else:
-                self.table.setRowHidden(row, True)
