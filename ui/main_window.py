@@ -1,111 +1,137 @@
-import sys
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
                                QPushButton, QStackedWidget, QLabel, QFrame)
 from PySide6.QtCore import Qt
-from ui.screens.pacientes import PacientesScreen    
+from PySide6.QtGui import QFont
+
+# Importação das telas do sistema
+from ui.screens.home import HomeScreen
+from ui.screens.pacientes import PacientesScreen
+from ui.screens.agenda import AgendaScreen  
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Prontu — Gerenciador Clínico Local")
-        self.resize(1100, 700)
+        self.setWindowTitle("Prontu — Prontuário Médico Inteligente")
+        self.resize(1200, 750)
         
-        # Widget Central e Layout Principal
-        self.central_widget = QWidget()
-        self.setCentralWidget(self.central_widget)
-        self.main_layout = QHBoxLayout(self.central_widget)
-        self.main_layout.setContentsMargins(0, 0, 0, 0)
-        self.main_layout.setSpacing(0)
+        # Lista global dinâmica de pastas do consultório
+        self.pastas_sistema = ["Geral", "Nutrição", "Cardiologia", "Pediatria"]
         
-        # Inicializar Componentes da UI
-        self.setup_sidebar()
-        self.setup_content_area()
+        # Widget Central e Layout Principal Horizontal
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
         
-        # Conectar botões do menu
-        self.connect_signals()
+        main_layout = QHBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         
-        # Definir tela inicial por padrão (Home = índice 0)
-        self.switch_screen(0)
-
-    def setup_sidebar(self):
-        """Cria a barra lateral de navegação."""
+        # --- 1. SIDEBAR LATERAL ---
         self.sidebar = QFrame()
         self.sidebar.setFixedWidth(220)
-        self.sidebar.setStyleSheet("background-color: #1e293b; color: white;")
+        self.sidebar.setStyleSheet("""
+            QFrame { background-color: #0f172a; border: none; }
+            QPushButton { 
+                color: #94a3b8; font-size: 14px; font-weight: 500; text-align: left;
+                padding: 12px 20px; border: none; border-radius: 6px; background-color: transparent;
+            }
+            QPushButton:hover { background-color: #1e293b; color: white; }
+            QPushButton:checked { background-color: #0284c7; color: white; font-weight: bold; }
+        """)
         
         sidebar_layout = QVBoxLayout(self.sidebar)
-        sidebar_layout.setContentsMargins(10, 20, 10, 20)
-        sidebar_layout.setSpacing(10)
+        sidebar_layout.setContentsMargins(15, 25, 15, 25)
+        sidebar_layout.setSpacing(8)
         
-        # Logo ou Nome do App no topo
-        self.logo_label = QLabel("PRONTU")
-        self.logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.logo_label.setStyleSheet("font-size: 20px; font-weight: bold; margin-bottom: 20px; color: #38bdf8;")
-        sidebar_layout.addWidget(self.logo_label)
+        # Logo do Prontu
+        logo = QLabel("🌱 Prontu")
+        logo.setStyleSheet("color: white; font-size: 22px; font-weight: bold; padding-left: 10px; margin-bottom: 20px;")
+        sidebar_layout.addWidget(logo)
         
         # Botões de Navegação
-        self.btn_home = QPushButton("🏠 Home")
-        self.btn_pacientes = QPushButton("👥 Pacientes")
-        self.btn_agenda = QPushButton("📅 Agenda")
-        self.btn_fichas = QPushButton("📄 Fichas Dinâmicas")
-        self.btn_config = QPushButton("⚙️ Configurações")
+        self.btn_home = QPushButton("🏠   Início")
+        self.btn_home.setCheckable(True)
+        self.btn_home.setChecked(True)
+        self.btn_home.clicked.connect(lambda: self.mudar_tela(self.screen_home, self.btn_home))
         
-        menu_buttons = [self.btn_home, self.btn_pacientes, self.btn_agenda, self.btn_fichas, self.btn_config]
-        for btn in menu_buttons:
-            btn.setCheckable(True)
-            btn.setStyleSheet("""
-                QPushButton {
-                    text-align: left; padding: 12px; font-size: 14px; 
-                    border: none; border-radius: 5px; color: #cbd5e1;
-                }
-                QPushButton:hover { background-color: #334155; color: white; }
-                QPushButton:checked { background-color: #0284c7; color: white; font-weight: bold; }
-            """)
-            sidebar_layout.addWidget(btn)
-            
+        self.btn_pacientes = QPushButton("👥   Pacientes")
+        self.btn_pacientes.setCheckable(True)
+        self.btn_pacientes.clicked.connect(lambda: self.mudar_tela(self.screen_pacientes, self.btn_pacientes))
+        
+        self.btn_agenda = QPushButton("📅   Agenda")
+        self.btn_agenda.setCheckable(True)
+        self.btn_agenda.clicked.connect(lambda: self.mudar_tela(self.screen_agenda, self.btn_agenda))
+        
+        self.btn_fichas = QPushButton("📥   Importar Fichas")
+        self.btn_fichas.setCheckable(True)
+        self.btn_fichas.clicked.connect(lambda: self.mudar_tela(self.screen_fichas, self.btn_fichas))
+        
+        self.btn_config = QPushButton("⚙️   Configurações")
+        self.btn_config.setCheckable(True)
+        self.btn_config.clicked.connect(lambda: self.mudar_tela(self.screen_config, self.btn_config))
+        
+        sidebar_layout.addWidget(self.btn_home)
+        sidebar_layout.addWidget(self.btn_pacientes)
+        sidebar_layout.addWidget(self.btn_agenda)
+        sidebar_layout.addWidget(self.btn_fichas)
+        sidebar_layout.addWidget(self.btn_config)
         sidebar_layout.addStretch()
-        self.main_layout.addWidget(self.sidebar)
-
-    def setup_content_area(self):
-        """Cria o container onde as telas serão trocadas."""
-        self.content_stack = QStackedWidget()
-        self.content_stack.setStyleSheet("background-color: #f8fafc;")
         
-        # Placeholders temporários (Estes continuam como QLabel)
-        self.screen_home = QLabel("Tela Home - Pacientes Recentes e Pastas")
-        self.screen_agenda = QLabel("Tela Agenda - Calendário Diário/Semanal/Mensal")
-        self.screen_fichas = QLabel("Tela Ficha Dinâmica - Importador de PDF/DOCX")
-        self.screen_config = QLabel("Tela Configurações - Caminho dos Dados")
+        main_layout.addWidget(self.sidebar)
         
-        # Tela Real de Pacientes (Instanciada corretamente como QWidget)
-        self.screen_pacientes = PacientesScreen() 
+        # --- 2. CONTÊINER DE TELAS DINÂMICAS (STACKED WIDGET) ---
+        self.stack = QStackedWidget()
+        main_layout.addWidget(self.stack, stretch=1)
         
-        # Aplica o alinhamento APENAS nas que ainda são placeholders (Labels)
-        for screen in [self.screen_home, self.screen_agenda, self.screen_fichas, self.screen_config]:
+        # Instanciação Inicial das Telas Reais
+        self.screen_home = HomeScreen(
+            window_principal=self, 
+            on_novo_paciente_click=self.ir_para_tela_pacientes
+        )
+        self.screen_pacientes = PacientesScreen()
+        self.screen_agenda = AgendaScreen()  
+        
+        # Atualiza os componentes internos que dependem das pastas
+        self.screen_pacientes.atualizar_combobox_pastas(self.pastas_sistema)
+        
+        # Telas secundárias que serão construídas posteriormente
+        self.screen_fichas = QLabel("Tela de Importação Automática em Breve")
+        self.screen_config = QLabel("Tela de Configurações em Breve")
+        
+        for screen in [self.screen_fichas, self.screen_config]:
             screen.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            screen.setStyleSheet("font-size: 18px; color: #64748b;")
+            screen.setStyleSheet("font-size: 16px; color: #64748b; font-weight: 500;")
             
-        # Adiciona todas as telas ao Stack na ordem correta dos índices
-        self.content_stack.addWidget(self.screen_home)       # Índice 0
-        self.content_stack.addWidget(self.screen_pacientes)  # Índice 1
-        self.content_stack.addWidget(self.screen_agenda)     # Índice 2
-        self.content_stack.addWidget(self.screen_fichas)     # Índice 3
-        self.content_stack.addWidget(self.screen_config)     # Índice 4
-        
-        self.main_layout.addWidget(self.content_stack)
+        self.stack.addWidget(self.screen_home)
+        self.stack.addWidget(self.screen_pacientes)
+        self.stack.addWidget(self.screen_agenda)
+        self.stack.addWidget(self.screen_fichas)
+        self.stack.addWidget(self.screen_config)
 
-    def connect_signals(self):
-        """Mapeia os cliques dos botões."""
-        self.btn_home.clicked.connect(lambda: self.switch_screen(0))
-        self.btn_pacientes.clicked.connect(lambda: self.switch_screen(1))
-        self.btn_agenda.clicked.connect(lambda: self.switch_screen(2))
-        self.btn_fichas.clicked.connect(lambda: self.switch_screen(3))
-        self.btn_config.clicked.connect(lambda: self.switch_screen(4))
-
-    def switch_screen(self, index):
-        """Muda a tela ativa e gerencia o estado visual dos botões."""
-        self.content_stack.setCurrentIndex(index)
+        # =========================================================================
+        # 🔄 ALIMENTAÇÃO DA BARRA DE PESQUISA DA AGENDA COM OS PACIENTES EXISTENTES
+        # =========================================================================
+        nomes_iniciais = []
+        for r in range(self.screen_pacientes.table.rowCount()):
+            item_nome = self.screen_pacientes.table.item(r, 0)
+            if item_nome:
+                nomes_iniciais.append(item_nome.text())
         
-        buttons = [self.btn_home, self.btn_pacientes, self.btn_agenda, self.btn_fichas, self.btn_config]
-        for i, btn in enumerate(buttons):
-            btn.setChecked(i == index)
+        self.screen_agenda.atualizar_lista_sugestoes(nomes_iniciais)
+        # =========================================================================
+
+    def mudar_tela(self, destino_widget, botao_clicado):
+        self.stack.setCurrentWidget(destino_widget)
+        for btn in [self.btn_home, self.btn_pacientes, self.btn_agenda, self.btn_fichas, self.btn_config]:
+            btn.setChecked(btn == botao_clicado)
+
+    def ir_para_tela_pacientes(self):
+        self.mudar_tela(self.screen_pacientes, self.btn_pacientes)
+
+    def processar_clique_pasta_home(self, nome_pasta):
+        self.screen_pacientes.filtrar_por_pasta_externo(nome_pasta)
+        self.ir_para_tela_pacientes()
+
+    def sincronizar_pastas_sistema(self, nova_lista):
+        """Atualiza a lista mestra global e força os componentes dependentes a se redesenharem."""
+        self.pastas_sistema = nova_lista
+        self.screen_pacientes.atualizar_combobox_pastas(self.pastas_sistema)

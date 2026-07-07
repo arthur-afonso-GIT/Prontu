@@ -28,7 +28,7 @@ class PacientesScreen(QWidget):
         filter_layout.setSpacing(10)
         
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText(" 🔍  Buscar paciente por nome ou telefone...")
+        self.search_input.setPlaceholderText(" 🔍   Buscar paciente por nome ou telefone...")
         self.search_input.setStyleSheet("""
             QLineEdit {
                 padding: 10px 15px; font-size: 14px; 
@@ -37,17 +37,12 @@ class PacientesScreen(QWidget):
             }
             QLineEdit:focus { border: 1px solid #0284c7; }
         """)
+        # Vincula a digitação ao filtro em tempo real
+        self.search_input.textChanged.connect(self.filtrar_tabela)
         
         self.folder_filter = QComboBox()
-        self.folder_filter.addItems(["📂 Todos os Pacientes", "Geral", "Nutrição", "Cardiologia", "Pediatria"])
-        self.folder_filter.setStyleSheet("""
-            QComboBox {
-                padding: 10px 15px; font-size: 14px; 
-                border: 1px solid #cbd5e1; border-radius: 6px; 
-                background-color: white; color: #334155;
-            }
-            QComboBox::drop-down { border: none; padding-right: 10px; }
-        """)
+        # Vincula a mudança de pasta ao filtro em tempo real
+        self.folder_filter.currentIndexChanged.connect(self.filtrar_tabela)
         
         filter_layout.addWidget(self.search_input, stretch=3)
         filter_layout.addWidget(self.folder_filter, stretch=1)
@@ -91,8 +86,6 @@ class PacientesScreen(QWidget):
         
         # VÍNCULO DE DUPLO CLIQUE NA LINHA
         self.table.cellDoubleClicked.connect(self.ao_dar_double_click)
-        
-        # DUMMY DATA REMOVIDA DAQUI (A tabela agora inicia com rowCount = 0)
         self.table.setRowCount(0)
         
         left_layout.addWidget(self.table)
@@ -129,6 +122,7 @@ class PacientesScreen(QWidget):
         vbox_nasc.addWidget(QLabel("Nascimento:"))
         self.input_nasc = QDateEdit()
         self.input_nasc.setCalendarPopup(True)
+        self.input_nasc.setDisplayFormat("dd/MM/yyyy")
         self.input_nasc.setDate(QDate(1980, 1, 1))
         self.input_nasc.dateChanged.connect(self.calculate_age)
         vbox_nasc.addWidget(self.input_nasc)
@@ -167,7 +161,6 @@ class PacientesScreen(QWidget):
 
         form_layout.addWidget(QLabel("Vincular à Pasta:"))
         self.input_pasta = QComboBox()
-        self.input_pasta.addItems(["Geral", "Nutrição", "Cardiologia", "Pediatria"])
         form_layout.addWidget(self.input_pasta)
         
         form_layout.addWidget(QLabel("Queixa Principal (QP):"))
@@ -229,13 +222,12 @@ class PacientesScreen(QWidget):
 
     def carregar_para_edicao(self, row_index):
         """Coleta os dados atuais da tabela e preenche o formulário para edição."""
-        # Se a linha clicada for inválida por algum motivo, aborta
         if row_index < 0:
             return
             
         self.row_em_edicao = row_index
         
-        # Atualiza elementos visuais do formulário para o modo de Edição (Cor Amarela)
+        # Updates visual elements of form to Edit mode (Yellow Color)
         self.form_title.setText("✏️ Editar Cadastro / Ficha")
         self.btn_salvar.setText("Atualizar Ficha")
         self.btn_salvar.setStyleSheet("""
@@ -308,6 +300,9 @@ class PacientesScreen(QWidget):
         self.input_convenio.clear()
         self.input_endereco.clear()
         self.input_qp.clear()
+        
+        # Dispara o filtro para reposicionar se o paciente trocou de pasta
+        self.filtrar_tabela()
 
     def open_whatsapp(self, telefone):
         num_limpo = "".join(filter(str.isdigit, telefone))
@@ -319,9 +314,145 @@ class PacientesScreen(QWidget):
 
     def apply_form_styles(self):
         widgets = [self.input_nome, self.input_tel, self.input_nasc, self.input_convenio, 
-                   self.input_sexo, self.input_endereco, self.input_pasta, self.input_qp]
+                   self.input_endereco, self.input_qp]
+        
+        # Estilo para os campos editáveis comuns
         for w in widgets:
             w.setStyleSheet("""
-                padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; 
-                background-color: #f8fafc; color: #0f172a; font-size: 13px;
+                QLineEdit, QDateEdit, QTextEdit {
+                    padding: 8px; 
+                    border: 1px solid #cbd5e1; 
+                    border-radius: 6px; 
+                    background-color: #f8fafc; 
+                    color: #0f172a; 
+                    font-size: 13px;
+                }
+                QLineEdit:focus, QDateEdit:focus, QTextEdit:focus { 
+                    border: 1px solid #0284c7; 
+                    background-color: white;
+                    color: #0f172a;
+                }
             """)
+
+        # Estilo específico e blindado para todos os QComboBox (Incluindo os dropdowns ocultos)
+        combobox_style = """
+            QComboBox {
+                padding: 8px; 
+                border: 1px solid #cbd5e1; 
+                border-radius: 6px; 
+                background-color: white; 
+                color: #0f172a; 
+                font-size: 13px;
+            }
+            QComboBox:focus { 
+                border: 1px solid #0284c7; 
+            }
+            QComboBox QAbstractItemView {
+                background-color: white;
+                color: #0f172a;
+                border: 1px solid #cbd5e1;
+                selection-background-color: #f1f5f9;
+                selection-color: #0284c7;
+                padding: 4px;
+            }
+        """
+        
+        self.input_sexo.setStyleSheet(combobox_style)
+        self.input_pasta.setStyleSheet(combobox_style)
+        
+        # Estiliza o filtro superior esquerdo também para ficar idêntico e blindado
+        self.folder_filter.setStyleSheet("""
+            QComboBox {
+                padding: 10px 15px; font-size: 14px; 
+                border: 1px solid #cbd5e1; border-radius: 6px; 
+                background-color: white; color: #0f172a;
+            }
+            QComboBox::drop-down { border: none; padding-right: 10px; }
+            QComboBox QAbstractItemView {
+                background-color: white;
+                color: #0f172a;
+                border: 1px solid #cbd5e1;
+                selection-background-color: #f1f5f9;
+                selection-color: #0284c7;
+                padding: 4px;
+            }
+        """)
+            
+    def preencher_formulario_via_importacao(self, dados):
+        """Recebe dados extraídos de arquivos externos e alimenta os inputs visuais automaticamente."""
+        self.input_nome.setText(dados.get("nome", ""))
+        self.input_tel.setText(dados.get("telefone", ""))
+        self.input_convenio.setText(dados.get("convenio", "PARTICULAR"))
+        self.input_endereco.setText(dados.get("endereco", ""))
+        self.input_qp.setText(dados.get("qp", ""))
+        
+        # Conversão e tratamento da Data de Nascimento
+        str_data = dados.get("nascimento", "")
+        try:
+            dia, mes, ano = map(int, str_data.split("/"))
+            self.input_nasc.setDate(QDate(ano, mes, dia))
+        except:
+            self.input_nasc.setDate(QDate(1980, 1, 1))
+
+    def atualizar_combobox_pastas(self, lista_pastas):
+        """Reconstrói os filtros e dropdowns baseando-se na lista global síncrona."""
+        # Salva a seleção atual para restaurar após atualizar a lista
+        current_filter = self.folder_filter.currentText()
+        current_input = self.input_pasta.currentText()
+
+        # 1. Atualiza o filtro de buscas superior da tabela
+        self.folder_filter.blockSignals(True)
+        self.folder_filter.clear()
+        self.folder_filter.addItem("📂 Todos os Pacientes")
+        for p in lista_pastas:
+            self.folder_filter.addItem(p)
+        
+        idx_f = self.folder_filter.findText(current_filter)
+        if idx_f >= 0: self.folder_filter.setCurrentIndex(idx_f)
+        self.folder_filter.blockSignals(False)
+            
+        # 2. Atualiza o seletor interno do formulário de cadastro
+        self.input_pasta.blockSignals(True)
+        self.input_pasta.clear()
+        self.input_pasta.addItems(lista_pastas)
+        
+        idx_i = self.input_pasta.findText(current_input)
+        if idx_i >= 0: self.input_pasta.setCurrentIndex(idx_i)
+        self.input_pasta.blockSignals(False)
+        
+        self.filtrar_tabela()
+            
+    def filtrar_por_pasta_externo(self, nome_pasta):
+        """Muda o combo box de filtro superior para a pasta selecionada na Home."""
+        index = self.folder_filter.findText(nome_pasta)
+        if index >= 0:
+            self.folder_filter.setCurrentIndex(index)
+
+    def filtrar_tabela(self):
+        """Filtra a QTableWidget cruzando o texto de busca com a pasta selecionada."""
+        texto_busca = self.search_input.text().strip().lower()
+        pasta_selecionada = self.folder_filter.currentText()
+        
+        for row in range(self.table.rowCount()):
+            item_nome = self.table.item(row, 0)
+            item_tel = self.table.item(row, 1)
+            item_pasta = self.table.item(row, 4)
+            
+            nome = item_nome.text().lower() if item_nome else ""
+            tel = item_tel.text().lower() if item_tel else ""
+            pasta_do_paciente = item_pasta.text() if item_pasta else ""
+            
+            # Condição 1: Valida o termo de busca (no nome ou telefone)
+            corresponde_busca = (texto_busca in nome) or (texto_busca in tel)
+            
+            # Condição 2: Valida a pasta selecionada
+            if pasta_selecionada == "📂 Todos os Pacientes" or not pasta_selecionada:
+                corresponde_pasta = True
+            else:
+                corresponde_pasta = (pasta_do_paciente == pasta_selecionada)
+                
+            # Exibe a linha se passar em ambos os filtros; senão, esconde
+            if corresponde_busca and corresponde_pasta:
+                self.table.setRowHidden(row, False)
+            else:
+                self.table.setRowHidden(row, True)
