@@ -5,7 +5,12 @@ from PySide6.QtCore import Qt
 
 from ui.screens.home import HomeScreen
 from ui.screens.pacientes import PacientesScreen
-from ui.screens.agenda import AgendaScreen  
+from ui.screens.agenda import AgendaScreen 
+
+try:
+    from ui.screens.fichas import FichasScreen
+except ImportError:
+    FichasScreen = QWidget
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -13,7 +18,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Prontu — Prontuário Médico Inteligente")
         self.resize(1200, 750)
         
-        # 1. 🗄️ Inicializa a estrutura e tabelas essenciais da base de dados
         self.init_db_estruturas()
         self.pastas_sistema = self.carregar_pastas_sqlite()
         
@@ -24,9 +28,11 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         
-        # --- 2. SIDEBAR LATERAL ---
+        # --- SIDEBAR LATERAL FIXA ---
         self.sidebar = QFrame()
         self.sidebar.setFixedWidth(220)
+        self.sidebar.setMinimumWidth(220)
+        self.sidebar.setMaximumWidth(220)
         self.sidebar.setStyleSheet("""
             QFrame { background-color: #0f172a; border: none; }
             QPushButton { 
@@ -63,17 +69,19 @@ class MainWindow(QMainWindow):
         
         self.btn_fichas = QPushButton("📝 Fichas Clínicas")
         self.btn_fichas.setCheckable(True)
+        self.btn_fichas.clicked.connect(lambda: self.mudar_tela(self.screen_fichas, self.btn_fichas))
         sidebar_layout.addWidget(self.btn_fichas)
         
         sidebar_layout.addStretch()
         
         self.btn_config = QPushButton("⚙️ Configurações")
         self.btn_config.setCheckable(True)
+        self.btn_config.clicked.connect(lambda: self.mudar_tela(self.screen_config, self.btn_config))
         sidebar_layout.addWidget(self.btn_config)
         
         main_layout.addWidget(self.sidebar)
         
-        # --- 3. ÁREA DE CONTEÚDO (STACKED WIDGET) ---
+        # --- ÁREA DE CONTEÚDO (STACKED WIDGET) ---
         self.stack = QStackedWidget()
         self.stack.setStyleSheet("background-color: #f8fafc;")
         
@@ -84,16 +92,27 @@ class MainWindow(QMainWindow):
         )
         self.screen_pacientes = PacientesScreen()
         self.screen_agenda = AgendaScreen()
+        self.screen_fichas = FichasScreen() 
+        self.screen_config = QWidget()
         
         self.stack.addWidget(self.screen_home)
         self.stack.addWidget(self.screen_pacientes)
         self.stack.addWidget(self.screen_agenda)
+        self.stack.addWidget(self.screen_fichas)  
+        self.stack.addWidget(self.screen_config)
         
-        main_layout.addWidget(self.stack, stretch=1)
+        main_layout.addWidget(self.stack)
         
-        # --- 4. ATUALIZAÇÕES E CONEXÕES REAIS ---
-        self.screen_pacientes.atualizar_combobox_pastas(self.pastas_sistema)
-        
+        # Inicializações de dados com tratamento contra falhas
+        try:
+            self.screen_pacientes.atualizar_combobox_pastas(self.pastas_sistema)
+            self.atualizar_sugestoes_agenda()
+            self.screen_home.renderizar_lista_pastas()
+            self.atualizar_dados_home()
+        except Exception as e:
+            print(f"Aviso na inicialização de dados: {e}")
+
+    def atualizar_sugestoes_agenda(self):
         nomes_iniciais = []
         try:
             conn = sqlite3.connect("consultorio.db")
@@ -101,105 +120,41 @@ class MainWindow(QMainWindow):
             cursor.execute("SELECT nome FROM pacientes")
             nomes_iniciais = [row[0].upper() for row in cursor.fetchall()]
             conn.close()
+            self.screen_agenda.atualizar_lista_sugestoes(nomes_iniciais)
         except:
             pass
-        
-        self.screen_agenda.atualizar_lista_sugestoes(nomes_iniciais)
-        
-        # Renderização inicial segura
-        self.screen_home.renderizar_lista_pastas()
-        self.atualizar_dados_home()
-
-    def init_db_estruturas(self):
-        """Garante que todas as tabelas necessárias existem fisicamente no SQLite e cria a coluna pasta se faltar"""
-        conn = sqlite3.connect("consultorio.db")
-        cursor = conn.cursor()
-        
-        # Tabela de Pastas
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS pastas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nome TEXT UNIQUE NOT NULL
-            )
-        """)
-        
-        # Tabela da Agenda
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS agenda (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                horario TEXT NOT NULL,
-                data TEXT NOT NULL,
-                paciente TEXT NOT NULL,
-                status TEXT NOT NULL
-            )
-        """)
-        
-        # 🛡️ PROTEÇÃO: Garante que a coluna 'pasta' existe na sua tabela de pacientes
-        try:
-            cursor.execute("ALTER TABLE pacientes ADD COLUMN pasta TEXT DEFAULT 'Geral'")
-        except sqlite3.OperationalError:
-            pass # A coluna já existe, tudo certo
-            
-        conn.commit()
-        conn.close()
-
-    def carregar_pastas_sqlite(self):
-        """Carrega as pastas. Limpa as genéricas de teste antigas deixando só a 'Geral'"""
-        conn = sqlite3.connect("consultorio.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT nome FROM pastas ORDER BY nome ASC")
-        rows = cursor.fetchall()
-        
-        pastas_atuais = [row[0] for row in rows]
-        # Se contiver os resquícios das pastas antigas genéricas, limpa imediatamente do banco
-        if len(pastas_atuais) > 1 and ("Cardiologia" in pastas_atuais or "Pediatria" in pastas_atuais):
-            cursor.execute("DELETE FROM pastas WHERE nome != 'Geral'")
-            conn.commit()
-            pastas_atuais = ["Geral"]
-            
-        conn.close()
-        
-        if pastas_atuais:
-            return pastas_atuais
-        
-        # Caso esteja 100% vazia, insere unicamente a pasta padrão
-        pastas_padrao = ["Geral"]
-        conn = sqlite3.connect("consultorio.db")
-        cursor = conn.cursor()
-        for pasta in pastas_padrao:
-            try:
-                cursor.execute("INSERT INTO pastas (nome) VALUES (?)", (pasta,))
-            except sqlite3.IntegrityError:
-                pass
-        conn.commit()
-        conn.close()
-        return pastas_padrao
-
-    def sincronizar_pastas_sistema(self, nova_lista):
-        self.pastas_sistema = sorted(list(set(nova_lista)))
-        conn = sqlite3.connect("consultorio.db")
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM pastas")
-        for pasta in self.pastas_sistema:
-            cursor.execute("INSERT INTO pastas (nome) VALUES (?)", (pasta,))
-        conn.commit()
-        conn.close()
-        self.screen_pacientes.atualizar_combobox_pastas(self.pastas_sistema)
 
     def mudar_tela(self, destino_widget, botao_clicado):
-        self.stack.setCurrentWidget(destino_widget)
-        for btn in [self.btn_home, self.btn_pacientes, self.btn_agenda, self.btn_fichas, self.btn_config]:
-            btn.setChecked(btn == botao_clicado)
+        """Alterna a tela ativa de forma segura capturando qualquer exceção interna."""
+        try:
+            self.stack.setCurrentWidget(destino_widget)
             
-        if destino_widget == self.screen_home:
-            self.atualizar_dados_home()
+            # Atualiza os estados visuais dos botões
+            for btn in [self.btn_home, self.btn_pacientes, self.btn_agenda, self.btn_fichas, self.btn_config]:
+                if btn:
+                    btn.setChecked(btn == botao_clicado)
+            
+            # Gatilhos protegidos para evitar travar o layout da Sidebar
+            if destino_widget == self.screen_home:
+                self.atualizar_dados_home()
+            elif destino_widget == self.screen_fichas:
+                if hasattr(self.screen_fichas, "carregar_pacientes_combo"):
+                    self.screen_fichas.carregar_pacientes_combo()
+            elif destino_widget == self.screen_agenda:
+                self.atualizar_sugestoes_agenda()
+                
+        except Exception as e:
+            print(f"Erro controlado ao mudar de tela: {e}")
 
     def ir_para_tela_pacientes(self):
         self.mudar_tela(self.screen_pacientes, self.btn_pacientes)
 
     def processar_clique_pasta_home(self, nome_pasta):
-        self.screen_pacientes.filtrar_por_pasta_externo(nome_pasta)
-        self.ir_para_tela_pacientes()
+        try:
+            self.screen_pacientes.filtrar_por_pasta_externo(nome_pasta)
+            self.ir_para_tela_pacientes()
+        except:
+            pass
 
     def atualizar_dados_home(self):
         try:
@@ -207,15 +162,60 @@ class MainWindow(QMainWindow):
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM pacientes")
             total_pacientes = cursor.fetchone()[0]
-            
             from PySide6.QtCore import QDate
             hoje_iso = QDate.currentDate().toString("yyyy-MM-dd")
             cursor.execute("SELECT COUNT(*) FROM agenda WHERE data = ?", (hoje_iso,))
             total_consultas = cursor.fetchone()[0]
             conn.close()
-        except:
-            total_pacientes = 0
-            total_consultas = 0
             
-        self.screen_home.card_pacientes.set_valor(str(total_pacientes))
-        self.screen_home.card_consultas.set_valor(str(total_consultas))
+            self.screen_home.card_pacientes.set_valor(str(total_pacientes))
+            self.screen_home.card_consultas.set_valor(str(total_consultas))
+        except:
+            pass
+
+    def init_db_estruturas(self):
+        try:
+            conn = sqlite3.connect("consultorio.db")
+            cursor = conn.cursor()
+            cursor.execute("CREATE TABLE IF NOT EXISTS pastas (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT UNIQUE NOT NULL)")
+            cursor.execute("CREATE TABLE IF NOT EXISTS agenda (id INTEGER PRIMARY KEY AUTOINCREMENT, horario TEXT NOT NULL, data TEXT NOT NULL, paciente TEXT NOT NULL, status TEXT NOT NULL)")
+            try:
+                cursor.execute("ALTER TABLE pacientes ADD COLUMN pasta TEXT DEFAULT 'Geral'")
+            except sqlite3.OperationalError:
+                pass 
+            conn.commit()
+            conn.close()
+        except:
+            pass
+
+    def carregar_pastas_sqlite(self):
+        try:
+            conn = sqlite3.connect("consultorio.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT nome FROM pastas ORDER BY nome ASC")
+            rows = cursor.fetchall()
+            pastas_atuais = [row[0] for row in rows]
+            if len(pastas_atuais) > 1 and ("Cardiologia" in pastas_atuais or "Pediatria" in pastas_atuais):
+                cursor.execute("DELETE FROM pastas WHERE nome != 'Geral'")
+                conn.commit()
+                pastas_atuais = ["Geral"]
+            conn.close()
+            if pastas_atuais:
+                return pastas_atuais
+        except:
+            pass
+        return ["Geral"]
+
+    def sincronizar_pastas_sistema(self, nova_lista):
+        try:
+            self.pastas_sistema = sorted(list(set(nova_lista)))
+            conn = sqlite3.connect("consultorio.db")
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM pastas")
+            for pasta in self.pastas_sistema:
+                cursor.execute("INSERT INTO pastas (nome) VALUES (?)", (pasta,))
+            conn.commit()
+            conn.close()
+            self.screen_pacientes.atualizar_combobox_pastas(self.pastas_sistema)
+        except:
+            pass
