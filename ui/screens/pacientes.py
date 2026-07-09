@@ -4,7 +4,8 @@ import urllib.parse
 import json
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, 
-                               QComboBox, QDateEdit, QHeaderView, QFrame, QTextEdit, QMessageBox, QListWidget, QDialog)
+                               QComboBox, QDateEdit, QHeaderView, QFrame, QTextEdit, QMessageBox, 
+                               QListWidget, QListWidgetItem, QDialog)  # <- CORRIGIDO AQUI
 from PySide6.QtCore import Qt, QDate
 
 class VisualizarFichaHistoricoDialog(QDialog):
@@ -556,8 +557,9 @@ class PacientesScreen(QWidget):
                 
                 self.btn_excluir.setVisible(True)
         except Exception as e:
-            print(f"Erro ao carregar dados textuais do paciente: {e}")
+            print(f"Erro ao carregar dados de texto do paciente: {e}")
             
+        # Fora do bloco Try/Except principal: as fichas carregarão mesmo com pendências de tabela
         self.carregar_historico_fichas_paciente(self.id_em_edicao)
 
     def carregar_historico_fichas_paciente(self, p_id):
@@ -578,7 +580,7 @@ class PacientesScreen(QWidget):
                 w_item.setData(Qt.UserRole, f)
                 self.list_historico_fichas.addItem(w_item)
         except Exception as e:
-            print(f"Erro ao consultar histórico de fichas: {e}")
+            print(f"Erro ao buscar histórico de fichas no banco: {e}")
 
     def abrir_ficha_historico_selecionada(self, item):
         dados = item.data(Qt.UserRole)

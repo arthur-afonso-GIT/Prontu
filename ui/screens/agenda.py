@@ -6,9 +6,6 @@ from PySide6.QtCore import Qt, QDate, QTime, QDateTime, QPoint
 
 class AgendaScreen(QWidget):
     # Grade fixa de horários (07:00 às 19:00, blocos de 30 min).
-    # Único ponto de verdade: usada tanto para renderizar a timeline quanto
-    # para o seletor de horário do formulário, então é impossível agendar
-    # um horário "fora da grade" (ex: 08:15).
     HORARIOS_GRADE = [
         "07:00", "07:30", "08:00", "08:30", "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
         "12:00", "12:30", "13:00", "13:30", "14:00", "14:30", "15:00", "15:30", "16:00", "16:30",
@@ -18,11 +15,13 @@ class AgendaScreen(QWidget):
     def __init__(self):
         super().__init__()
         
+        # Garante cor padrão de texto escura para a tela toda contra bugs de tema do Windows
+        self.setStyleSheet("color: #0f172a;")
+        
         self.data_visualizada = QDate.currentDate()
-        self.lista_pacientes_disponiveis = []
+        self.lista_pacientes_disponiveis = []  # Guarda a lista mestre (todos os cadastrados)
         
         # Banco de dados em memória local (Dicionário estruturado por Data -> Hora)
-        # Agora suporta o tipo: "principal" (onde fica o card) ou "continua" (bloqueado pela duração)
         self.db_agendamentos = {}
         
         # Layout Principal
@@ -114,6 +113,10 @@ class AgendaScreen(QWidget):
         self.input_paciente.setEditable(True)
         self.input_paciente.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.input_paciente.setPlaceholderText("Selecione ou digite para buscar...")
+        
+        # Conecta o sinal de digitação do campo de texto interno para filtrar dinamicamente
+        self.input_paciente.lineEdit().textEdited.connect(self.filtrar_pacientes_ao_digitar)
+        
         form_layout.addWidget(self.input_paciente)
         
         tempo_layout = QHBoxLayout()
@@ -168,20 +171,44 @@ class AgendaScreen(QWidget):
         self.renderizar_timeline_calendario()
 
     def atualizar_lista_sugestoes(self, nomes_pacientes):
+        """Atualiza a lista mestra de pacientes cadastrados vindos do arquivo principal."""
         self.lista_pacientes_disponiveis = sorted(list(set(nomes_pacientes)))
+        
         self.input_paciente.blockSignals(True)
         self.input_paciente.clear()
         self.input_paciente.addItems(self.lista_pacientes_disponiveis)
-        
-        from PySide6.QtWidgets import QCompleter
-        from PySide6.QtCore import QStringListModel
-        model = QStringListModel(self.lista_pacientes_disponiveis)
-        completer = QCompleter(model, self)
-        completer.setFilterMode(Qt.MatchFlag.MatchContains)
-        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        completer.popup().setStyleSheet("QAbstractItemView { background-color: white; color: #0f172a; border: 1px solid #cbd5e1; selection-background-color: #0284c7; selection-color: white; font-size: 13px; padding: 4px; }")
-        self.input_paciente.setCompleter(completer)
         self.input_paciente.setCurrentIndex(-1)
+        self.input_paciente.blockSignals(False)
+
+    def filtrar_pacientes_ao_digitar(self, texto_digitado):
+        """Filtra a ComboBox em tempo real SEM auto-selecionar o primeiro item."""
+        texto_norm = texto_digitado.strip().lower()
+        
+        self.input_paciente.blockSignals(True)
+        self.input_paciente.clear()
+        
+        if not texto_norm:
+            # Se o campo estiver vazio, exibe todos os pacientes de volta e tira seleção
+            self.input_paciente.addItems(self.lista_pacientes_disponiveis)
+            self.input_paciente.setCurrentIndex(-1)
+            self.input_paciente.setEditText("")
+        else:
+            # Filtra os pacientes que possuem o termo digitado
+            filtrados = [p for p in self.lista_pacientes_disponiveis if texto_norm in p.lower()]
+            
+            # Adiciona os itens filtrados na combobox
+            self.input_paciente.addItems(filtrados)
+            
+            # CRUCIAL: Reseta o índice para -1 para que NENHUM item seja selecionado sozinho
+            self.input_paciente.setCurrentIndex(-1)
+            
+            # Mantém estritamente o texto que o usuário digitou no campo de edição
+            self.input_paciente.setEditText(texto_digitado)
+            
+            # Se houver correspondências, abre a lista de opções para o usuário poder clicar
+            if filtrados:
+                self.input_paciente.showPopup()
+                
         self.input_paciente.blockSignals(False)
 
     def abrir_mini_calendario(self):
@@ -192,8 +219,8 @@ class AgendaScreen(QWidget):
         self.popup_calendario.setGridVisible(False)
         self.popup_calendario.setFixedSize(300, 260)
         self.popup_calendario.setStyleSheet("""
-            QCalendarWidget { background-color: white; border: 1px solid #cbd5e1; border-radius: 8px; }
-            QCalendarWidget QTableView { background-color: white; selection-background-color: #0284c7; selection-color: white; outline: none; }
+            QCalendarWidget { background-color: white; border: 1px solid #cbd5e1; border-radius: 8px; color: #0f172a; }
+            QCalendarWidget QTableView { background-color: white; selection-background-color: #0284c7; selection-color: white; outline: none; color: #0f172a; }
             QCalendarWidget QAbstractItemView:enabled { color: #0f172a; background-color: white; selection-background-color: #0284c7; selection-color: white; }
             QCalendarWidget QAbstractItemView:disabled { color: #cbd5e1; }
             QCalendarWidget QWidget#qt_calendar_navigationbar { background-color: #0f172a; border-top-left-radius: 8px; border-top-right-radius: 8px; }
@@ -203,11 +230,6 @@ class AgendaScreen(QWidget):
             QCalendarWidget QMenu { background-color: white; color: #0f172a; }
         """)
 
-        # CORREÇÃO: o cabeçalho de dias da semana precisa de um modo de
-        # redimensionamento explícito (Stretch). Sem isso, em temas nativos
-        # (ex: Windows), o cálculo automático de largura das colunas pode
-        # colapsar as colunas do meio (seg-sex) para quase 0px, deixando
-        # só domingo e sábado visíveis.
         tabela_dias = self.popup_calendario.findChild(QTableView)
         if tabela_dias:
             cabecalho = tabela_dias.horizontalHeader()
@@ -216,8 +238,6 @@ class AgendaScreen(QWidget):
 
         self.popup_calendario.clicked.connect(self.ao_escolher_data_popup)
 
-        # Centraliza o popup embaixo do botão de data, em vez de alinhar
-        # pela borda esquerda (que ficava desalinhado com textos longos)
         x_central = self.btn_data_central.mapToGlobal(QPoint(0, 0)).x() + (self.btn_data_central.width() // 2)
         y_abaixo = self.btn_data_central.mapToGlobal(QPoint(0, self.btn_data_central.height() + 6)).y()
         self.popup_calendario.move(x_central - (self.popup_calendario.width() // 2), y_abaixo)
@@ -229,7 +249,6 @@ class AgendaScreen(QWidget):
         self.popup_calendario.close()
 
     def converter_duracao_minutos(self, texto_duracao):
-        """Mapeia as strings legíveis do combo box para inteiros computáveis."""
         if "15" in texto_duracao: return 15
         if "30" in texto_duracao: return 30
         if "45" in texto_duracao: return 45
@@ -238,7 +257,6 @@ class AgendaScreen(QWidget):
         if "2 horas" in texto_duracao: return 120
         return 30
 
-    # --- NOVO SISTEMA DE TIMELINE COM RESERVA POR COMPRIMENTO ---
     def renderizar_timeline_calendario(self):
         while self.layout_timeline.count():
             item = self.layout_timeline.takeAt(0)
@@ -265,7 +283,6 @@ class AgendaScreen(QWidget):
                 dados = agendamentos_do_dia[hora]
                 
                 if dados["tipo_bloco"] == "principal":
-                    # CARD DO COMPROMISSO REAL
                     status_txt = dados["status"]
                     cor_borda = "#0284c7"
                     if "Confirmado" in status_txt: cor_borda = "#10b981"
@@ -299,7 +316,6 @@ class AgendaScreen(QWidget):
                     
                     bloco_layout.addWidget(card_info, stretch=1)
                 else:
-                    # BLOCO DE CONTINUAÇÃO (RESERVADO PELA DURAÇÃO)
                     card_bloqueado = QFrame()
                     card_bloqueado.setStyleSheet("QFrame { background-color: #f1f5f9; border: 1px dashed #cbd5e1; border-left: 5px solid #cbd5e1; border-radius: 6px; }")
                     cb_layout = QHBoxLayout(card_bloqueado)
@@ -311,9 +327,8 @@ class AgendaScreen(QWidget):
                     
                     bloco_layout.addWidget(card_bloqueado, stretch=1)
             else:
-                # HORÁRIO TOTALMENTE VAZIO
                 lbl_vazio = QLabel("— Horário Disponível —")
-                lbl_vazio.setStyleSheet("color: #94a3b8; font-size: 13px; font-style: italic;")
+                lbl_vazio.setStyleSheet("color: #94a3b8; font-size: 13px; font-style: italic; background: transparent;")
                 bloco_layout.addWidget(lbl_vazio, stretch=1)
                 bloco_row.setStyleSheet("QFrame { background-color: white; border: 1px dashed #e2e8f0; border-radius: 6px; } QFrame:hover { border: 1px solid #cbd5e1; background-color: #f8fafc; }")
             
@@ -338,62 +353,59 @@ class AgendaScreen(QWidget):
         self.btn_data_central.setText(self.data_visualizada.toString("dd 'de' MMMM 'de' yyyy"))
 
     def _paciente_do_slot(self, str_data, hora):
-        """Retorna o nome do paciente dono do slot informado, seja ele o bloco
-        principal ou uma continuação (nesse caso resolve até o bloco de origem)."""
         dados = self.db_agendamentos[str_data][hora]
         return dados.get("paciente", "outro paciente")
 
-    # --- LÓGICA DE SALVAMENTO MULTI-BLOCO ---
     def salvar_agendamento_click(self):
         paciente = self.input_paciente.currentText().strip()
         if not paciente:
-            QMessageBox.warning(self, "Campo Obrigatório", "Por favor, selecione ou digite o nome de um paciente!")
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Campo Obrigatório")
+            msg.setText("Por favor, selecione ou digite o nome de um paciente!")
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setStyleSheet("QMessageBox { background-color: #ffffff; } QLabel { color: #0f172a; font-size: 13px; } QPushButton { background-color: #e2e8f0; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px 15px; font-weight: bold; }")
+            msg.exec()
             return
         
         qtime_inicial = QTime.fromString(self.input_hora.currentText(), "hh:mm")
         duracao_minutos = self.converter_duracao_minutos(self.input_duracao.currentText())
         str_data = self.data_visualizada.toString("dd/MM/yyyy")
 
-        # Validação: avisa (sem bloquear) se a data/hora escolhida já passou
         datahora_agendamento = QDateTime(self.data_visualizada, qtime_inicial)
         if datahora_agendamento < QDateTime.currentDateTime():
-            resposta = QMessageBox.question(
-                self, "⏰ Horário no Passado",
-                f"O horário das {qtime_inicial.toString('hh:mm')} em "
-                f"{self.data_visualizada.toString('dd/MM/yyyy')} já passou.\n\n"
-                "Deseja registrar esse agendamento mesmo assim?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            if resposta != QMessageBox.StandardButton.Yes:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("⏰ Horário no Passado")
+            msg.setText(f"O horário das {qtime_inicial.toString('hh:mm')} em {self.data_visualizada.toString('dd/MM/yyyy')} já passou.\n\nDeseja registrar esse agendamento mesmo assim?")
+            msg.setIcon(QMessageBox.Icon.Question)
+            msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            msg.setDefaultButton(QMessageBox.StandardButton.No)
+            msg.setStyleSheet("QMessageBox { background-color: #ffffff; } QLabel { color: #0f172a; font-size: 13px; } QPushButton { background-color: #e2e8f0; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px 15px; font-weight: bold; }")
+            if msg.exec() != QMessageBox.StandardButton.Yes:
                 return
         
         if str_data not in self.db_agendamentos:
             self.db_agendamentos[str_data] = {}
             
-        # 1. Mapeia todos os sub-horários afetados por essa duração (de 30 em 30 min)
         horarios_a_reservar = []
         minutos_acumulados = 0
         
         while minutos_acumulados < duracao_minutos:
             slot_hora = qtime_inicial.addSecs(minutos_acumulados * 60).toString("hh:mm")
             horarios_a_reservar.append(slot_hora)
-            minutos_acumulados += 30  # Avança em frações padrão
+            minutos_acumulados += 30
 
-        # 2. Varre se há algum conflito em qualquer um dos blocos gerados,
-        # já identificando o paciente que está ocupando o horário
         for slot in horarios_a_reservar:
             if slot in self.db_agendamentos[str_data]:
                 paciente_conflito = self._paciente_do_slot(str_data, slot)
-                QMessageBox.critical(
-                    self, "⚠️ Conflito de Agenda",
-                    f"Não foi possível agendar. O horário das {slot} já está ocupado "
-                    f"por {paciente_conflito}!",
-                    QMessageBox.StandardButton.Ok
-                )
+                msg = QMessageBox(self)
+                msg.setWindowTitle("⚠️ Conflito de Agenda")
+                msg.setText(f"Não foi possível agendar. O horário das {slot} já está ocupado por {paciente_conflito}!")
+                msg.setIcon(QMessageBox.Icon.Critical)
+                msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+                msg.setStyleSheet("QMessageBox { background-color: #ffffff; } QLabel { color: #0f172a; font-size: 13px; } QPushButton { background-color: #e2e8f0; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px 15px; font-weight: bold; }")
+                msg.exec()
                 return
 
-        # 3. Se estiver livre, grava o Bloco Principal
         hora_inicial_str = horarios_a_reservar[0]
         self.db_agendamentos[str_data][hora_inicial_str] = {
             "tipo_bloco": "principal",
@@ -401,10 +413,9 @@ class AgendaScreen(QWidget):
             "procedimento": self.input_procedimento.currentText(),
             "status": self.input_status.currentText(),
             "duracao_txt": self.input_duracao.currentText(),
-            "slots_vinculados": horarios_a_reservar # Guarda a lista para remoção em lote depois
+            "slots_vinculados": horarios_a_reservar
         }
         
-        # 4. Grava os Blocos de Continuação/Bloqueio subsequentes
         for slot_sequencia in horarios_a_reservar[1:]:
             self.db_agendamentos[str_data][slot_sequencia] = {
                 "tipo_bloco": "continua",
@@ -412,21 +423,17 @@ class AgendaScreen(QWidget):
                 "hora_origem": hora_inicial_str
             }
         
-        # Limpeza padrão do formulário
-        self.input_paciente.setCurrentIndex(-1)
+        # Reseta o campo restaurando a lista completa após o salvamento correto
+        self.atualizar_lista_sugestoes(self.lista_pacientes_disponiveis)
         self.input_obs.clear()
 
-        # UX: avança o seletor de horário para o próximo slot livre logo após
-        # esse atendimento, agilizando o cadastro de vários pacientes seguidos
         ultimo_slot_ocupado = QTime.fromString(horarios_a_reservar[-1], "hh:mm")
         proximo_slot = ultimo_slot_ocupado.addSecs(30 * 60).toString("hh:mm")
         if proximo_slot in self.HORARIOS_GRADE:
             self.input_hora.setCurrentText(proximo_slot)
         
-        # Força o redesenho imediato
         self.renderizar_timeline_calendario()
 
-    # --- REMOÇÃO EM LOTE DOS BLOCOS (com confirmação de segurança) ---
     def remover_agendamento(self, hora):
         str_data = self.data_visualizada.toString("dd/MM/yyyy")
         if str_data not in self.db_agendamentos or hora not in self.db_agendamentos[str_data]:
@@ -436,17 +443,16 @@ class AgendaScreen(QWidget):
         if dados["tipo_bloco"] != "principal":
             return
 
-        resposta = QMessageBox.question(
-            self, "Confirmar Cancelamento",
-            f"Cancelar o agendamento de {dados['paciente']} às {hora} "
-            f"({dados['duracao_txt']})?\n\nEsta ação não poderá ser desfeita.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if resposta != QMessageBox.StandardButton.Yes:
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Confirmar Cancelamento")
+        msg.setText(f"Cancelar o agendamento de {dados['paciente']} às {hora} ({dados['duracao_txt']})?\n\nEsta ação não poderá ser desfeita.")
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+        msg.setStyleSheet("QMessageBox { background-color: #ffffff; } QLabel { color: #0f172a; font-size: 13px; } QPushButton { background-color: #e2e8f0; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px 15px; font-weight: bold; }")
+        if msg.exec() != QMessageBox.StandardButton.Yes:
             return
 
-        # Limpa todos os slots que esse agendamento reservou de uma vez só
         for slot in dados["slots_vinculados"]:
             if slot in self.db_agendamentos[str_data]:
                 del self.db_agendamentos[str_data][slot]
@@ -465,5 +471,6 @@ class AgendaScreen(QWidget):
             c.setStyleSheet("""
                 QComboBox { padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; background-color: white; color: #0f172a; font-size: 13px; }
                 QComboBox:focus { border: 1px solid #0284c7; }
+                QComboBox QLineEdit { color: #0f172a; background-color: white; selection-background-color: #0284c7; selection-color: white; }
                 QComboBox QAbstractItemView { background-color: white; color: #0f172a; border: 1px solid #cbd5e1; selection-background-color: #0284c7; selection-color: white; padding: 4px; }
             """)
