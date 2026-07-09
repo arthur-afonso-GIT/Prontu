@@ -1,454 +1,717 @@
 import sqlite3
 import webbrowser
 import urllib.parse
+import json
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, 
-                               QComboBox, QDateEdit, QHeaderView, QFrame, QTextEdit)
+                               QComboBox, QDateEdit, QHeaderView, QFrame, QTextEdit, QMessageBox, QListWidget, QDialog)
 from PySide6.QtCore import Qt, QDate
+
+class VisualizarFichaHistoricoDialog(QDialog):
+    """Janela pop-up para ler uma ficha clínica antiga do histórico"""
+    def __init__(self, titulo_ficha, data_atendimento, dados_respostas, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Histórico: {titulo_ficha}")
+        self.setMinimumSize(500, 450)
+        self.setStyleSheet("background-color: #ffffff;")
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+        
+        lbl_titulo = QLabel(f"📋 {titulo_ficha}")
+        lbl_titulo.setStyleSheet("font-size: 16px; font-weight: bold; color: #0284c7; background: transparent;")
+        lbl_data = QLabel(f"📅 Atendimento realizado em: {data_atendimento}")
+        lbl_data.setStyleSheet("color: #64748b; font-size: 12px; font-weight: 500; background: transparent;")
+        
+        layout.addWidget(lbl_titulo)
+        layout.addWidget(lbl_data)
+        
+        self.txt_conteudo = QTextEdit()
+        self.txt_conteudo.setReadOnly(True)
+        self.txt_conteudo.setStyleSheet("QTextEdit { background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; color: #0f172a; font-size: 13px; }")
+        
+        texto_formatado = ""
+        try:
+            respostas = json.loads(dados_respostas)
+            if respostas:
+                for campo, valor in respostas.items():
+                    campo_nome = campo.replace("custom_", "").replace("_", " ").upper()
+                    valor_texto = "☑️ Sim" if valor is True else ("☐ Não" if valor is False else str(valor))
+                    texto_formatado += f"■ {campo_nome}:\n{valor_texto if valor_texto.strip() else '(Vazio)'}\n\n"
+            else:
+                texto_formatado = "Nenhuma resposta registrada nesta ficha."
+        except:
+            texto_formatado = "Erro ao processar as respostas da ficha."
+            
+        self.txt_conteudo.setPlainText(texto_formatado)
+        layout.addWidget(self.txt_conteudo)
+        
+        btn_fechar = QPushButton("Fechar Visualização")
+        btn_fechar.setStyleSheet("QPushButton { background-color: #0284c7; color: white; padding: 8px; border-radius: 6px; font-weight: bold; border: none; } QPushButton:hover { background-color: #0369a1; }")
+        btn_fechar.clicked.connect(self.accept)
+        layout.addWidget(btn_fechar)
+
 
 class PacientesScreen(QWidget):
     def __init__(self):
         super().__init__()
         
-        # Inicializa o Banco de Dados SQL local
         self.init_db()
         
-        # Variável de controle para saber se estamos editando alguém (-1 significa Novo Cadastro)
         self.id_em_edicao = -1
         self.row_em_edicao = -1
         
-        # Layout Principal (Horizontal: Listagem à esquerda, Cadastro à direita)
         main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(25)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        main_layout.setSpacing(20)
         
         # --- COLUNA DA ESQUERDA: BUSCA E LISTA ---
         left_container = QWidget()
         left_layout = QVBoxLayout(left_container)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(15)
+        left_layout.setSpacing(12)
         
-        # Linha de Filtros (Busca + Filtro de Pasta)
         filter_layout = QHBoxLayout()
-        filter_layout.setSpacing(10)
         
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText(" 🔍   Buscar paciente por nome ou telefone...")
-        self.search_input.setStyleSheet("""
+        self.input_busca = QLineEdit()
+        self.input_busca.setPlaceholderText("🔍 Buscar paciente por nome, CPF, RG ou telefone...")
+        self.input_busca.setStyleSheet("""
             QLineEdit {
-                padding: 10px 15px; font-size: 14px; 
-                border: 1px solid #cbd5e1; border-radius: 6px; 
-                background-color: white; color: #334155;
+                padding: 9px;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                background-color: white;
+                color: #0f172a;
+                font-size: 13px;
+                min-height: 20px;
             }
             QLineEdit:focus { border: 1px solid #0284c7; }
         """)
-        self.search_input.textChanged.connect(self.carregar_pacientes_db)
+        self.input_busca.textChanged.connect(self.filtrar_pacientes)
+        filter_layout.addWidget(self.input_busca)
         
-        self.folder_filter = QComboBox()
-        self.folder_filter.setStyleSheet("""
+        self.combo_filtro_pasta = QComboBox()
+        self.combo_filtro_pasta.addItem("📁 Todas as Pastas")
+        self.combo_filtro_pasta.setStyleSheet("""
             QComboBox {
-                padding: 10px 15px; font-size: 14px; 
-                border: 1px solid #cbd5e1; border-radius: 6px; 
-                background-color: white; color: #334155;
+                padding: 8px;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                background-color: white;
+                color: #0f172a;
+                min-width: 150px;
+                min-height: 20px;
             }
-            QComboBox::drop-down { border: none; padding-right: 10px; }
         """)
-        self.folder_filter.currentIndexChanged.connect(self.carregar_pacientes_db)
+        self.combo_filtro_pasta.currentTextChanged.connect(self.filtrar_pacientes)
+        filter_layout.addWidget(self.combo_filtro_pasta)
         
-        filter_layout.addWidget(self.search_input, stretch=3)
-        filter_layout.addWidget(self.folder_filter, stretch=1)
         left_layout.addLayout(filter_layout)
         
-        # Tabela de Pacientes
-        self.table = QTableWidget()
-        self.table.setColumnCount(7)  # 7 colunas para incluir o ID oculto do banco
-        self.table.setHorizontalHeaderLabels(["Nome", "Telefone", "Idade", "Convênio", "Pasta", "Ações", "ID"])
-        self.table.setColumnHidden(6, True) # Oculta o ID numérico
-        
-        # Ajuste Fixo e Seguro para as colunas não cortarem o botão do Whats
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        
-        self.table.setColumnWidth(1, 130)
-        self.table.setColumnWidth(3, 110)
-        self.table.setColumnWidth(5, 100)
-        
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setShowGrid(False)
-        self.table.verticalHeader().setDefaultSectionSize(48)
-        
-        self.table.setStyleSheet("""
-            QTableWidget { 
-                background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 13px; color: #334155;
+        self.tabela = QTableWidget()
+        self.tabela.setColumnCount(5)
+        self.tabela.setHorizontalHeaderLabels(["ID", "Nome", "Telefone", "Convênio", "Pasta"])
+        self.tabela.verticalHeader().setVisible(False)
+        self.tabela.setSelectionBehavior(QTableWidget.SelectRows)
+        self.tabela.setSelectionMode(QTableWidget.SingleSelection)
+        self.tabela.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tabela.setStyleSheet("""
+            QTableWidget {
+                background-color: white;
+                color: #0f172a;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                gridline-color: #f1f5f9;
             }
-            QTableWidget::item { padding-left: 10px; padding-right: 10px; border-bottom: 1px solid #f1f5f9; }
-            QTableWidget::item:selected { background-color: #e0f2fe; color: #0369a1; }
-            QHeaderView::section { 
-                background-color: #f8fafc; padding: 12px 10px; border: none; border-bottom: 2px solid #e2e8f0;
-                font-weight: bold; color: #475569; font-size: 13px; text-align: left;
+            QTableWidget::item { padding: 8px; }
+            QTableWidget::item:selected {
+                background-color: #f0f9ff;
+                color: #0369a1;
+                font-weight: 500;
+            }
+            QHeaderView::section {
+                background-color: #f8fafc;
+                color: #475569;
+                font-weight: bold;
+                font-size: 12px;
+                border: none;
+                border-bottom: 2px solid #e2e8f0;
+                padding: 8px;
             }
         """)
         
-        self.table.cellDoubleClicked.connect(self.ao_dar_double_click)
-        self.table.setRowCount(0)
+        self.tabela.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tabela.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.tabela.itemSelectionChanged.connect(self.carregar_paciente_selecionado)
+        left_layout.addWidget(self.tabela)
         
-        left_layout.addWidget(self.table)
+        main_layout.addWidget(left_container, stretch=2)
         
-        # --- COLUNA DA DIREITA: FORMULÁRIO DE CADASTRO / EDIÇÃO ---
-        self.form_container = QFrame()
-        self.form_container.setFixedWidth(360)
-        self.form_container.setStyleSheet("""
-            QFrame { background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; }
-            QLabel { color: #334155; font-weight: 500; font-size: 12px; border: none; }
+        # --- COLUNA DA DIREITA: FORMULÁRIO DE CADASTRO ---
+        self.right_container = QFrame()
+        self.right_container.setObjectName("FormContainer")
+        self.right_container.setStyleSheet("""
+            QFrame#FormContainer {
+                background-color: white;
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+            }
+            QLabel {
+                color: #334155;
+                font-weight: 500;
+                font-size: 11px;
+            }
         """)
+        self.right_container.setFixedWidth(420)
         
-        form_layout = QVBoxLayout(self.form_container)
-        form_layout.setContentsMargins(20, 20, 20, 20)
-        form_layout.setSpacing(12)
+        right_layout = QVBoxLayout(self.right_container)
+        right_layout.setContentsMargins(15, 15, 15, 15)
+        right_layout.setSpacing(6)
         
-        self.form_title = QLabel("Novo Cadastro / Ficha")
-        self.form_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #0f172a; margin-bottom: 5px;")
-        form_layout.addWidget(self.form_title)
+        self.lbl_form_titulo = QLabel("👤 Novo Prontuário Clínico")
+        self.lbl_form_titulo.setStyleSheet("font-size: 15px; font-weight: bold; color: #0f172a; padding-bottom: 2px;")
+        right_layout.addWidget(self.lbl_form_titulo)
         
-        form_layout.addWidget(QLabel("Nome Completo:"))
+        input_style = """
+            QLineEdit, QComboBox, QDateEdit {
+                padding: 5px;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                background-color: white;
+                color: #0f172a;
+                min-height: 24px;
+            }
+            QLineEdit:focus, QComboBox:focus, QDateEdit:focus {
+                border: 1px solid #0284c7;
+            }
+        """
+        
+        calendar_style = """
+            QCalendarWidget QWidget { 
+                background-color: #ffffff; 
+                color: #0f172a; 
+            }
+            QCalendarWidget QAbstractItemView:enabled {
+                background-color: #ffffff;
+                color: #0f172a;
+                selection-background-color: #0284c7;
+                selection-color: white;
+            }
+            QCalendarWidget QMenu {
+                background-color: #ffffff;
+                color: #0f172a;
+            }
+            QCalendarWidget QSpinBox {
+                background-color: #ffffff;
+                color: #0f172a;
+            }
+        """
+        
+        right_layout.addWidget(QLabel("Nome Completo:*"))
         self.input_nome = QLineEdit()
-        self.input_nome.setPlaceholderText("Ex: Francisca de Alencar Costa")
-        form_layout.addWidget(self.input_nome)
+        self.input_nome.setStyleSheet(input_style)
+        right_layout.addWidget(self.input_nome)
         
-        form_layout.addWidget(QLabel("Telefone celular:"))
+        layout_tel_zap = QHBoxLayout()
+        v_box_tel = QVBoxLayout()
+        v_box_tel.addWidget(QLabel("Telefone / Celular:"))
         self.input_tel = QLineEdit()
-        self.input_tel.setPlaceholderText("Ex: 81984358219")
-        form_layout.addWidget(self.input_tel)
+        self.input_tel.setStyleSheet(input_style)
+        self.input_tel.setPlaceholderText("Ex: 11999998888")
+        v_box_tel.addWidget(self.input_tel)
+        layout_tel_zap.addLayout(v_box_tel)
         
-        nasc_idade_layout = QHBoxLayout()
-        vbox_nasc = QVBoxLayout()
-        vbox_nasc.addWidget(QLabel("Nascimento:"))
+        self.btn_whatsapp = QPushButton("💬 Zap")
+        self.btn_whatsapp.setStyleSheet("""
+            QPushButton {
+                background-color: #25d366;
+                color: white;
+                border: none;
+                font-weight: bold;
+                border-radius: 6px;
+                margin-top: 15px;
+                padding: 5px 12px;
+                min-height: 24px;
+            }
+            QPushButton:hover { background-color: #128c7e; }
+        """)
+        self.btn_whatsapp.clicked.connect(self.abrir_whatsapp_paciente)
+        layout_tel_zap.addWidget(self.btn_whatsapp)
+        right_layout.addLayout(layout_tel_zap)
+        
+        row_nasc_sexo = QHBoxLayout()
+        box_nasc = QVBoxLayout()
+        box_nasc.addWidget(QLabel("Data de Nascimento:"))
         self.input_nasc = QDateEdit()
         self.input_nasc.setCalendarPopup(True)
+        self.input_nasc.calendarWidget().setStyleSheet(calendar_style)
         self.input_nasc.setDisplayFormat("dd/MM/yyyy")
-        self.input_nasc.setDate(QDate(1980, 1, 1))
-        self.input_nasc.dateChanged.connect(self.calculate_age)
-        vbox_nasc.addWidget(self.input_nasc)
+        self.input_nasc.setDate(QDate(1990, 1, 1))
+        self.input_nasc.setStyleSheet(input_style)
+        box_nasc.addWidget(self.input_nasc)
+        row_nasc_sexo.addLayout(box_nasc)
         
-        vbox_idade = QVBoxLayout()
-        vbox_idade.addWidget(QLabel("Idade:"))
-        self.label_idade = QLabel("46 anos")
-        self.label_idade.setStyleSheet("font-weight: bold; color: #0284c7; font-size: 15px; border: none;")
-        vbox_idade.addWidget(self.label_idade)
-        
-        nasc_idade_layout.addLayout(vbox_nasc)
-        nasc_idade_layout.addLayout(vbox_idade)
-        form_layout.addLayout(nasc_idade_layout)
-        
-        convenio_sexo_layout = QHBoxLayout()
-        vbox_conv = QVBoxLayout()
-        vbox_conv.addWidget(QLabel("Convênio:"))
-        self.input_convenio = QLineEdit()
-        self.input_convenio.setPlaceholderText("Particular / Unimed...")
-        vbox_conv.addWidget(self.input_convenio)
-        
-        vbox_sexo = QVBoxLayout()
-        vbox_sexo.addWidget(QLabel("Sexo:"))
+        box_sexo = QVBoxLayout()
+        box_sexo.addWidget(QLabel("Sexo Biológico:"))
         self.input_sexo = QComboBox()
-        self.input_sexo.addItems(["Feminino", "Masculino", "Não Informado"])
-        vbox_sexo.addWidget(self.input_sexo)
+        self.input_sexo.addItems(["Masculino", "Feminino", "Outro"])
+        self.input_sexo.setStyleSheet(input_style)
+        box_sexo.addWidget(self.input_sexo)
+        row_nasc_sexo.addLayout(box_sexo)
+        right_layout.addLayout(row_nasc_sexo)
         
-        convenio_sexo_layout.addLayout(vbox_conv)
-        convenio_sexo_layout.addLayout(vbox_sexo)
-        form_layout.addLayout(convenio_sexo_layout)
+        row_docs = QHBoxLayout()
+        box_cpf = QVBoxLayout()
+        box_cpf.addWidget(QLabel("CPF:"))
+        self.input_cpf = QLineEdit()
+        self.input_cpf.setStyleSheet(input_style)
+        box_cpf.addWidget(self.input_cpf)
+        row_docs.addLayout(box_cpf)
         
-        form_layout.addWidget(QLabel("Endereço Residencial:"))
+        box_rg = QVBoxLayout()
+        box_rg.addWidget(QLabel("RG:"))
+        self.input_rg = QLineEdit()
+        self.input_rg.setStyleSheet(input_style)
+        box_rg.addWidget(self.input_rg)
+        row_docs.addLayout(box_rg)
+        right_layout.addLayout(row_docs)
+        
+        row_social = QHBoxLayout()
+        box_civil = QVBoxLayout()
+        box_civil.addWidget(QLabel("Estado Civil:"))
+        self.input_civil = QLineEdit()
+        self.input_civil.setStyleSheet(input_style)
+        box_civil.addWidget(self.input_civil)
+        row_social.addLayout(box_civil)
+        
+        box_prof = QVBoxLayout()
+        box_prof.addWidget(QLabel("Profissão:"))
+        self.input_profissao = QLineEdit()
+        self.input_profissao.setStyleSheet(input_style)
+        box_prof.addWidget(self.input_profissao)
+        row_social.addLayout(box_prof)
+        right_layout.addLayout(row_social)
+        
+        right_layout.addWidget(QLabel("Endereço Residencial Completo:"))
         self.input_endereco = QLineEdit()
-        self.input_endereco.setPlaceholderText("Rua, Número, Bairro, Cidade")
-        form_layout.addWidget(self.input_endereco)
-
-        form_layout.addWidget(QLabel("Vincular à Pasta:"))
+        self.input_endereco.setStyleSheet(input_style)
+        right_layout.addWidget(self.input_endereco)
+        
+        row_conv_pasta = QHBoxLayout()
+        box_conv = QVBoxLayout()
+        box_conv.addWidget(QLabel("Convênio / Plano:"))
+        self.input_convenio = QLineEdit("PARTICULAR")
+        self.input_convenio.setStyleSheet(input_style)
+        box_conv.addWidget(self.input_convenio)
+        row_conv_pasta.addLayout(box_conv)
+        
+        box_pasta = QVBoxLayout()
+        box_pasta.addWidget(QLabel("Alocar na Pasta:"))
         self.input_pasta = QComboBox()
-        form_layout.addWidget(self.input_pasta)
+        self.input_pasta.setStyleSheet(input_style)
+        box_pasta.addWidget(self.input_pasta)
+        row_conv_pasta.addLayout(box_pasta)
+        right_layout.addLayout(row_conv_pasta)
         
-        form_layout.addWidget(QLabel("Queixa Principal (QP):"))
+        right_layout.addWidget(QLabel("Queixa Principal Inicial (Motivo da abertura):"))
         self.input_qp = QTextEdit()
-        self.input_qp.setPlaceholderText("Escreva aqui o motivo principal da consulta do paciente...")
-        self.input_qp.setMaximumHeight(90)
-        form_layout.addWidget(self.input_qp)
-        
-        self.apply_form_styles()
-        form_layout.addStretch()
-        
-        self.btn_salvar = QPushButton("Salvar Ficha e Paciente")
-        self.btn_salvar.setStyleSheet("""
-            QPushButton { background-color: #0284c7; color: white; padding: 12px; font-weight: bold; border-radius: 6px; border: none; font-size: 14px;}
-            QPushButton:hover { background-color: #0369a1; }
+        self.input_qp.setStyleSheet("""
+            QTextEdit {
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                background-color: white;
+                color: #0f172a;
+                padding: 6px;
+            }
+            QTextEdit:focus { border: 1px solid #0284c7; }
         """)
-        self.btn_salvar.clicked.connect(self.salvar_paciente_click)
-        form_layout.addWidget(self.btn_salvar)
+        self.input_qp.setFixedHeight(50)
+        right_layout.addWidget(self.input_qp)
         
-        main_layout.addWidget(left_container, stretch=3)
-        main_layout.addWidget(self.form_container, stretch=1)
-        
-        self.carregar_pacientes_db()
-
-    def init_db(self):
-        conn = sqlite3.connect("consultorio.db")
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS pacientes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nome TEXT NOT NULL,
-                telefone TEXT,
-                nascimento TEXT,
-                convenio TEXT,
-                sexo TEXT,
-                endereco TEXT,
-                pasta TEXT,
-                queixa_principal TEXT
-            )
-        """)
-        conn.commit()
-        conn.close()
-
-    def carregar_pacientes_db(self):
-        if self.folder_filter.count() == 0:
-            return
-
-        texto_busca = self.search_input.text().strip().upper()
-        pasta_selecionada = self.folder_filter.currentText()
-
-        conn = sqlite3.connect("consultorio.db")
-        cursor = conn.cursor()
-
-        query = "SELECT id, nome, telefone, nascimento, convenio, pasta FROM pacientes WHERE 1=1"
-        parametros = []
-
-        if texto_busca:
-            query += " AND (nome LIKE ? OR telefone LIKE ?)"
-            parametros.append(f"%{texto_busca}%")
-            parametros.append(f"%{texto_busca}%")
-
-        if pasta_selecionada and pasta_selecionada != "📂 Todos os Pacientes":
-            query += " AND pasta = ?"
-            parametros.append(pasta_selecionada)
-
-        query += " ORDER BY nome ASC"
-        cursor.execute(query, parametros)
-        linhas = cursor.fetchall()
-        conn.close()
-
-        self.table.setRowCount(0)
-        hoje = QDate.currentDate()
-
-        for dados in linhas:
-            id_db, nome, tel, nasc_str, convenio, pasta = dados
-            
-            idade_anos = ""
-            try:
-                dia, mes, ano = map(int, nasc_str.split("/"))
-                data_nasc = QDate(ano, mes, dia)
-                idade_anos = str(data_nasc.daysTo(hoje) // 365)
-            except:
-                pass
-
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-
-            self.table.setItem(row, 0, self.format_row_item(nome.upper()))
-            self.table.setItem(row, 1, self.format_row_item(tel))
-            self.table.setItem(row, 2, self.format_row_item(idade_anos, center=True))
-            self.table.setItem(row, 3, self.format_row_item(convenio.upper()))
-            self.table.setItem(row, 4, self.format_row_item(pasta, center=True))
-            self.table.setCellWidget(row, 5, self.create_action_buttons(tel))
-            self.table.setItem(row, 6, QTableWidgetItem(str(id_db)))
-
-    def calculate_age(self, date):
-        hoje = QDate.currentDate()
-        anos = hoje.year() - date.year()
-        if (hoje.month() < date.month()) or (hoje.month() == date.month() and hoje.day() < date.day()):
-            anos -= 1
-        self.label_idade.setText(f"{anos} anos")
-
-    def format_row_item(self, text, center=False):
-        item = QTableWidgetItem(text)
-        if center:
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        else:
-            item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        return item
-
-    def create_action_buttons(self, tel):
-        actions_widget = QWidget()
-        actions_layout = QHBoxLayout(actions_widget)
-        actions_layout.setContentsMargins(5, 2, 5, 2)
-        actions_layout.setSpacing(0)
-        
-        btn_wa = QPushButton("💬 Whats")
-        btn_wa.setStyleSheet("""
-            QPushButton { background-color: #25d366; color: white; border: none; border-radius: 4px; font-size: 12px; font-weight: bold; padding: 6px 12px; }
-            QPushButton:hover { background-color: #1cbd55; }
-        """)
-        btn_wa.clicked.connect(lambda checked=False, t=tel: self.open_whatsapp(t))
-        
-        actions_layout.addWidget(btn_wa)
-        return actions_widget
-
-    def ao_dar_double_click(self, row, column):
-        self.carregar_para_edicao(row)
-
-    def carregar_para_edicao(self, row_index):
-        if row_index < 0:
-            return
-            
-        self.row_em_edicao = row_index
-        self.id_em_edicao = int(self.table.item(row_index, 6).text())
-        
-        conn = sqlite3.connect("consultorio.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT nome, telefone, nascimento, convenio, sexo, endereco, pasta, queixa_principal FROM pacientes WHERE id = ?", (self.id_em_edicao,))
-        dados = cursor.fetchone()
-        conn.close()
-
-        if not dados:
-            return
-
-        nome, tel, nascimento, convenio, sexo, endereco, pasta, qp = dados
-
-        self.form_title.setText("✏️ Editar Cadastro / Ficha")
-        self.btn_salvar.setText("Atualizar Ficha")
-        self.btn_salvar.setStyleSheet("""
-            QPushButton { background-color: #eab308; color: white; padding: 12px; font-weight: bold; border-radius: 6px; border: none; font-size: 14px;}
-            QPushButton:hover { background-color: #ca8a04; }
-        """)
-
-        self.input_nome.setText(nome)
-        self.input_tel.setText(tel)
-        self.input_convenio.setText(convenio)
-        self.input_endereco.setText(endereco)
-        self.input_qp.setText(qp)
-        
-        index_sexo = self.input_sexo.findText(sexo)
-        if index_sexo >= 0:
-            self.input_sexo.setCurrentIndex(index_sexo)
-
-        index_pasta = self.input_pasta.findText(pasta)
-        if index_pasta >= 0:
-            self.input_pasta.setCurrentIndex(index_pasta)
-            
-        try:
-            dia, mes, ano = map(int, nascimento.split("/"))
-            self.input_nasc.setDate(QDate(ano, mes, dia))
-        except:
-            self.input_nasc.setDate(QDate(1980, 1, 1))
-
-    def salvar_paciente_click(self):
-        nome = self.input_nome.text().strip()
-        tel = self.input_tel.text().strip()
-        nascimento = self.input_nasc.date().toString("dd/MM/yyyy")
-        convenio = self.input_convenio.text().strip() or "Particular"
-        sexo = self.input_sexo.currentText()
-        endereco = self.input_endereco.text().strip()
-        pasta = self.input_pasta.currentText()
-        qp = self.input_qp.toPlainText().strip()
-        
-        if not nome:
-            self.input_nome.setPlaceholderText("⚠️ O Nome é obrigatório!")
-            return
-            
-        conn = sqlite3.connect("consultorio.db")
-        cursor = conn.cursor()
-
-        if self.id_em_edicao == -1:
-            cursor.execute("""
-                INSERT INTO pacientes (nome, telefone, nascimento, convenio, sexo, endereco, pasta, queixa_principal)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (nome, tel, nascimento, convenio, sexo, endereco, pasta, qp))
-        else:
-            cursor.execute("""
-                UPDATE pacientes 
-                SET nome=?, telefone=?, nascimento=?, convenio=?, sexo=?, endereco=?, pasta=?, queixa_principal=?
-                WHERE id=?
-            """, (nome, tel, nascimento, convenio, sexo, endereco, pasta, qp, self.id_em_edicao))
-            
-        conn.commit()
-        conn.close()
-
-        self.carregar_pacientes_db()
-        
-        self.id_em_edicao = -1
-        self.row_em_edicao = -1
-        self.form_title.setText("Novo Cadastro / Ficha")
-        self.btn_salvar.setText("Salvar Ficha e Paciente")
-        self.btn_salvar.setStyleSheet("""
-            QPushButton { background-color: #0284c7; color: white; padding: 12px; font-weight: bold; border-radius: 6px; border: none; font-size: 14px;}
-            QPushButton:hover { background-color: #0369a1; }
-        """)
-        
-        self.input_nome.clear()
-        self.input_tel.clear()
-        self.input_convenio.clear()
-        self.input_endereco.clear()
-        self.input_qp.clear()
-        self.input_nasc.setDate(QDate(1980, 1, 1))
-
-    def open_whatsapp(self, telefone):
-        num_limpo = "".join(filter(str.isdigit, telefone))
-        if not num_limpo: return
-        if not num_limpo.startswith("55"):
-            num_limpo = "55" + num_limpo
-        texto = urllib.parse.quote("Olá, confirmamos sua consulta no Prontu.")
-        webbrowser.open(f"https://wa.me/{num_limpo}?text={texto}")
-
-    def apply_form_styles(self):
-        widgets = [self.input_nome, self.input_tel, self.input_nasc, self.input_convenio, 
-                   self.input_sexo, self.input_endereco, self.input_pasta, self.input_qp]
-        
-        for w in widgets:
-            w.setStyleSheet("""
-                QLineEdit, QDateEdit, QTextEdit {
-                    padding: 8px; 
-                    border: 1px solid #cbd5e1; 
-                    border-radius: 6px; 
-                    background-color: #f8fafc; 
-                    color: #0f172a; 
-                    font-size: 13px;
-                }
-                QLineEdit:focus, QDateEdit:focus, QTextEdit:focus { 
-                    border: 1px solid #0284c7; 
-                    background-color: white;
-                    color: #0f172a;
-                }
-            """)
-
-        combobox_style = """
-            QComboBox {
-                padding: 8px; 
+        sep = QFrame()
+        sep.setStyleSheet("background-color: #e2e8f0; max-height: 1px; border: none; margin: 2px 0;")
+        right_layout.addWidget(sep)
+        right_layout.addWidget(QLabel("📋 Prontuários Ocorridos (Duplo clique para abrir):"))
+        self.list_historico_fichas = QListWidget()
+        self.list_historico_fichas.setStyleSheet("""
+            QListWidget { 
+                background-color: #f8fafc; 
                 border: 1px solid #cbd5e1; 
                 border-radius: 6px; 
-                background-color: #f8fafc; 
                 color: #0f172a; 
-                font-size: 13px;
+            } 
+            QListWidget::item { 
+                padding: 4px; 
+                border-bottom: 1px solid #e2e8f0; 
+            } 
+            QListWidget::item:hover { 
+                background-color: #e2e8f0; 
+                border-radius: 4px; 
             }
-            QComboBox:focus { 
-                border: 1px solid #0284c7; 
-                background-color: white;
+        """)
+        self.list_historico_fichas.setFixedHeight(75)
+        self.list_historico_fichas.itemDoubleClicked.connect(self.abrir_ficha_historico_selecionada)
+        right_layout.addWidget(self.list_historico_fichas)
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+        btn_layout.setContentsMargins(0, 2, 0, 0)
+        
+        self.btn_limpar = QPushButton("🔄 Limpar / Novo")
+        self.btn_limpar.setStyleSheet("""
+            QPushButton {
+                background-color: #f1f5f9;
+                color: #334155;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                padding: 8px;
+                font-weight: bold;
+                min-height: 20px;
             }
+            QPushButton:hover { background-color: #e2e8f0; }
+        """)
+        self.btn_limpar.clicked.connect(self.limpar_formulario)
+        btn_layout.addWidget(self.btn_limpar)
+        
+        self.btn_salvar = QPushButton("💾 Salvar Registro")
+        self.btn_salvar.setStyleSheet("""
+            QPushButton {
+                background-color: #0284c7;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px;
+                font-weight: bold;
+                min-height: 20px;
+            }
+            QPushButton:hover { background-color: #0369a1; }
+        """)
+        self.btn_salvar.clicked.connect(self.salvar_paciente)
+        btn_layout.addWidget(self.btn_salvar)
+        right_layout.addLayout(btn_layout)
+
+        self.btn_excluir = QPushButton("❌ Excluir Paciente")
+        self.btn_excluir.setVisible(False)
+        self.btn_excluir.setStyleSheet("""
+            QPushButton {
+                background-color: #fef2f2;
+                color: #dc2626;
+                border: 1px solid #fee2e2;
+                border-radius: 6px;
+                padding: 8px;
+                font-weight: bold;
+                min-height: 20px;
+                margin-top: 2px;
+            }
+            QPushButton:hover { background-color: #fee2e2; }
+        """)
+        self.btn_excluir.clicked.connect(self.excluir_paciente)
+        right_layout.addWidget(self.btn_excluir)
+        
+        combobox_dropdown_style = """
+            QComboBox { background-color: white; color: #0f172a; }
             QComboBox QAbstractItemView {
                 background-color: white;
                 color: #0f172a;
                 border: 1px solid #cbd5e1;
                 selection-background-color: #0284c7;
                 selection-color: white;
-                padding: 4px;
             }
         """
-        self.input_sexo.setStyleSheet(combobox_style)
-        self.input_pasta.setStyleSheet(combobox_style)
+        self.input_sexo.setStyleSheet(self.input_sexo.styleSheet() + combobox_dropdown_style)
+        self.input_pasta.setStyleSheet(self.input_pasta.styleSheet() + combobox_dropdown_style)
+        
+        main_layout.addWidget(self.right_container)
+        self.carregar_pacientes_tabela()
+
+    def mostrar_alerta_seguro(self, tipo, titulo, texto):
+        msg = QMessageBox(self)
+        msg.setWindowTitle(titulo)
+        msg.setText(texto)
+        if tipo == "warning":
+            msg.setIcon(QMessageBox.Warning)
+        elif tipo == "error":
+            msg.setIcon(QMessageBox.Critical)
+        else:
+            msg.setIcon(QMessageBox.Information)
             
+        msg.setStyleSheet("""
+            QMessageBox { background-color: #ffffff; }
+            QLabel { color: #0f172a; font-size: 13px; font-weight: normal; }
+            QPushButton { background-color: #0284c7; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold; }
+            QPushButton:hover { background-color: #0369a1; }
+        """)
+        msg.exec()
+
+    def init_db(self):
+        try:
+            conn = sqlite3.connect("consultorio.db")
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pacientes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    nome TEXT,
+                    telefone TEXT,
+                    nascimento TEXT,
+                    convenio TEXT,
+                    pasta TEXT
+                )
+            """)
+            
+            novas_colunas = [
+                ("sexo", "TEXT"),
+                ("cpf", "TEXT"),
+                ("rg", "TEXT"),
+                ("estado_civil", "TEXT"),
+                ("profissao", "TEXT"),
+                ("endereco", "TEXT"),
+                ("queixa", "TEXT")
+            ]
+            
+            for col_nome, col_tipo in novas_colunas:
+                try:
+                    cursor.execute(f"ALTER TABLE pacientes ADD COLUMN {col_nome} {col_tipo}")
+                except sqlite3.OperationalError:
+                    pass
+                    
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Erro na migração do DB: {e}")
+
+    def abrir_whatsapp_paciente(self):
+        numero = "".join(c for c in self.input_tel.text().strip() if c.isdigit())
+        if not numero:
+            self.mostrar_alerta_seguro("warning", "WhatsApp", "Por favor, digite um número válido primeiro.")
+            return
+        if len(numero) <= 11: 
+            numero = "55" + numero
+        
+        texto_padrao = urllib.parse.quote("Olá! Entramos em contato a partir do consultório médico.")
+        webbrowser.open(f"https://web.whatsapp.com/send?phone={numero}&text={texto_padrao}")
+
+    def carregar_pacientes_tabela(self, lista_customizada=None):
+        self.tabela.setRowCount(0)
+        rows = lista_customizada
+        
+        if rows is None:
+            try:
+                conn = sqlite3.connect("consultorio.db")
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, nome, telefone, convenio, pasta FROM pacientes ORDER BY nome ASC")
+                rows = cursor.fetchall()
+                conn.close()
+            except:
+                rows = []
+                
+        for row_idx, row_data in enumerate(rows):
+            self.tabela.insertRow(row_idx)
+            for col_idx, value in enumerate(row_data):
+                item = QTableWidgetItem(str(value))
+                self.tabela.setItem(row_idx, col_idx, item)
+
+    def carregar_paciente_selecionado(self):
+        item_selecionado = self.tabela.selectedItems()
+        if not item_selecionado:
+            self.btn_excluir.setVisible(False)
+            return
+            
+        self.row_em_edicao = self.tabela.currentRow()
+        self.id_em_edicao = int(self.tabela.item(self.row_em_edicao, 0).text())
+        
+        try:
+            conn = sqlite3.connect("consultorio.db")
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT nome, telefone, nascimento, convenio, pasta, 
+                       sexo, cpf, rg, estado_civil, profissao, endereco, queixa 
+                FROM pacientes WHERE id = ?
+            """, (self.id_em_edicao,))
+            p = cursor.fetchone()
+            conn.close()
+            
+            if p:
+                self.lbl_form_titulo.setText("📝 Editando Prontuário")
+                self.input_nome.setText(p[0] if p[0] else "")
+                self.input_tel.setText(p[1] if p[1] else "")
+                
+                try:
+                    if p[2]:
+                        self.input_nasc.setDate(QDate.fromString(p[2], "yyyy-MM-dd"))
+                    else:
+                        self.input_nasc.setDate(QDate(1990, 1, 1))
+                except:
+                    self.input_nasc.setDate(QDate(1990, 1, 1))
+                    
+                self.input_convenio.setText(p[3] if p[3] else "PARTICULAR")
+                self.input_pasta.setCurrentText(p[4] if p[4] else "")
+                self.input_sexo.setCurrentText(p[5] if p[5] else "Masculino")
+                self.input_cpf.setText(p[6] if p[6] else "")
+                self.input_rg.setText(p[7] if p[7] else "")
+                self.input_civil.setText(p[8] if p[8] else "")
+                self.input_profissao.setText(p[9] if p[9] else "")
+                self.input_endereco.setText(p[10] if p[10] else "")
+                self.input_qp.setPlainText(p[11] if p[11] else "")
+                
+                self.btn_excluir.setVisible(True)
+        except Exception as e:
+            print(f"Erro ao carregar dados textuais do paciente: {e}")
+            
+        self.carregar_historico_fichas_paciente(self.id_em_edicao)
+
+    def carregar_historico_fichas_paciente(self, p_id):
+        self.list_historico_fichas.clear()
+        try:
+            conn = sqlite3.connect("consultorio.db")
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, modelo_nome, data_atendimento, dados_respostas 
+                FROM fichas_preenchidas WHERE paciente_id = ? ORDER BY id DESC
+            """, (p_id,))
+            
+            fichas = cursor.fetchall()
+            conn.close()
+            
+            for f in fichas:
+                w_item = QListWidgetItem(f"📄 {f[1]} ({f[2]})")
+                w_item.setData(Qt.UserRole, f)
+                self.list_historico_fichas.addItem(w_item)
+        except Exception as e:
+            print(f"Erro ao consultar histórico de fichas: {e}")
+
+    def abrir_ficha_historico_selecionada(self, item):
+        dados = item.data(Qt.UserRole)
+        if dados: 
+            VisualizarFichaHistoricoDialog(dados[1], dados[2], dados[3], self).exec()
+
+    def filtrar_pacientes(self):
+        texto = self.input_busca.text().lower().strip()
+        pasta_filtro = self.combo_filtro_pasta.currentText()
+        
+        try:
+            conn = sqlite3.connect("consultorio.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, nome, telefone, convenio, pasta, cpf, rg FROM pacientes ORDER BY nome ASC")
+            todos = cursor.fetchall()
+            conn.close()
+            
+            filtrados = []
+            for p in todos:
+                nome, fone, conv, pasta, cpf, rg = str(p[1]).lower(), str(p[2]).lower(), str(p[3]).lower(), str(p[4]), str(p[5]).lower(), str(p[6]).lower()
+                
+                match_texto = not texto or (texto in nome or texto in fone or texto in conv or texto in cpf or texto in rg)
+                match_pasta = "Todas as Pastas" in pasta_filtro or pasta == pasta_filtro
+                
+                if match_texto and match_pasta:
+                    filtrados.append(p[:5])
+                    
+            self.carregar_pacientes_tabela(filtrados)
+        except:
+            pass
+
+    def filtrar_por_pasta_externo(self, nome_pasta):
+        self.combo_filtro_pasta.setCurrentText(nome_pasta)
+        self.filtrar_pacientes()
+
+    def salvar_paciente(self):
+        nome = self.input_nome.text().strip()
+        fone = self.input_tel.text().strip()
+        nasc = self.input_nasc.date().toString("yyyy-MM-dd")
+        conv = self.input_convenio.text().strip()
+        pasta = self.input_pasta.currentText()
+        sexo = self.input_sexo.currentText()
+        cpf = self.input_cpf.text().strip()
+        rg = self.input_rg.text().strip()
+        civil = self.input_civil.text().strip()
+        prof = self.input_profissao.text().strip()
+        end = self.input_endereco.text().strip()
+        queixa = self.input_qp.toPlainText().strip()
+        
+        if not nome:
+            self.mostrar_alerta_seguro("warning", "Aviso", "O campo Nome Completo é obrigatório.")
+            return
+            
+        try:
+            conn = sqlite3.connect("consultorio.db")
+            cursor = conn.cursor()
+            
+            if self.id_em_edicao == -1:
+                cursor.execute("""
+                    INSERT INTO pacientes (nome, telefone, nascimento, convenio, pasta, sexo, cpf, rg, estado_civil, profissao, endereco, queixa) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (nome, fone, nasc, conv, pasta, sexo, cpf, rg, civil, prof, end, queixa))
+            else:
+                cursor.execute("""
+                    UPDATE pacientes SET nome=?, telefone=?, nascimento=?, convenio=?, pasta=?, 
+                                         sexo=?, cpf=?, rg=?, estado_civil=?, profissao=?, endereco=?, queixa=?
+                    WHERE id=?
+                """, (nome, fone, nasc, conv, pasta, sexo, cpf, rg, civil, prof, end, queixa, self.id_em_edicao))
+                
+            conn.commit()
+            conn.close()
+            
+            self.limpar_formulario()
+            self.carregar_pacientes_tabela()
+            self.mostrar_alerta_seguro("success", "Sucesso", "Prontuário do paciente salvo com sucesso!")
+        except Exception as e:
+            self.mostrar_alerta_seguro("error", "Erro Crítico", f"Erro ao salvar no banco:\n{str(e)}")
+
+    def excluir_paciente(self):
+        if self.id_em_edicao == -1:
+            return
+            
+        nome_paciente = self.input_nome.text()
+        
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Confirmar Exclusão")
+        msg.setText(f"Tem certeza que deseja excluir o prontuário de '{nome_paciente}'?\nEsta ação não poderá ser desfeita.")
+        msg.setIcon(QMessageBox.Question)
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg.setDefaultButton(QMessageBox.No)
+        msg.setStyleSheet("""
+            QMessageBox { background-color: #ffffff; }
+            QLabel { color: #0f172a; font-size: 13px; }
+            QPushButton { background-color: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; border-radius: 4px; padding: 5px 12px; font-weight: bold; }
+            QPushButton:hover { background-color: #e2e8f0; }
+        """)
+        
+        if msg.exec() == QMessageBox.Yes:
+            try:
+                conn = sqlite3.connect("consultorio.db")
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM pacientes WHERE id = ?", (self.id_em_edicao,))
+                cursor.execute("DELETE FROM fichas_preenchidas WHERE paciente_id = ?", (self.id_em_edicao,))
+                conn.commit()
+                conn.close()
+                
+                self.limpar_formulario()
+                self.carregar_pacientes_tabela()
+                self.mostrar_alerta_seguro("success", "Excluído", "O registro do paciente foi deletado com sucesso.")
+            except Exception as e:
+                self.mostrar_alerta_seguro("error", "Erro", f"Falha ao deletar registro:\n{str(e)}")
+
+    def limpar_formulario(self):
+        self.id_em_edicao = -1
+        self.row_em_edicao = -1
+        self.lbl_form_titulo.setText("👤 Novo Prontuário Clínico")
+        self.input_nome.clear()
+        self.input_tel.clear()
+        self.input_nasc.setDate(QDate(1990, 1, 1))
+        self.input_convenio.setText("PARTICULAR")
+        self.input_sexo.setCurrentIndex(0)
+        self.input_cpf.clear()
+        self.input_rg.clear()
+        self.input_civil.clear()
+        self.input_profissao.clear()
+        self.input_endereco.clear()
+        self.input_qp.clear()
+        self.list_historico_fichas.clear()
+        self.tabela.clearSelection()
+        self.btn_excluir.setVisible(False)
+        if self.input_pasta.count() > 0: 
+            self.input_pasta.setCurrentIndex(0)
+
     def preencher_formulario_via_importacao(self, dados):
         self.input_nome.setText(dados.get("nome", ""))
         self.input_tel.setText(dados.get("telefone", ""))
@@ -464,17 +727,18 @@ class PacientesScreen(QWidget):
             self.input_nasc.setDate(QDate(1980, 1, 1))
 
     def atualizar_combobox_pastas(self, lista_pastas):
-        self.folder_filter.clear()
-        self.folder_filter.addItem("📂 Todos os Pacientes")
-        for p in lista_pastas:
-            self.folder_filter.addItem(p)
-            
-        self.input_pasta.clear()
-        self.input_pasta.addItems(lista_pastas)
+        pasta_atual_filtro = self.combo_filtro_pasta.currentText()
+        pasta_atual_input = self.input_pasta.currentText()
         
-        self.carregar_pacientes_db()
+        self.combo_filtro_pasta.clear()
+        self.combo_filtro_pasta.addItem("📁 Todas as Pastas")
+        self.input_pasta.clear()
+        
+        for p in lista_pastas:
+            self.combo_filtro_pasta.addItem(p)
+            self.input_pasta.addItem(p)
             
-    def filtrar_por_pasta_externo(self, nome_pasta):
-        index = self.folder_filter.findText(nome_pasta)
-        if index >= 0:
-            self.folder_filter.setCurrentIndex(index)
+        if self.combo_filtro_pasta.findText(pasta_atual_filtro) != -1:
+            self.combo_filtro_pasta.setCurrentText(pasta_atual_filtro)
+        if self.input_pasta.findText(pasta_atual_input) != -1:
+            self.input_pasta.setCurrentText(pasta_atual_input)

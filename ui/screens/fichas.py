@@ -183,6 +183,7 @@ class FichasScreen(QWidget):
     def init_db(self):
         try:
             conn = sqlite3.connect("consultorio.db")
+            conn.text_factory = str
             cursor = conn.cursor()
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS fichas_preenchidas (
@@ -209,6 +210,7 @@ class FichasScreen(QWidget):
         self.combo_paciente.clear()
         try:
             conn = sqlite3.connect("consultorio.db")
+            conn.text_factory = str
             cursor = conn.cursor()
             cursor.execute("SELECT id, nome FROM pacientes ORDER BY nome ASC")
             rows = cursor.fetchall()
@@ -224,6 +226,7 @@ class FichasScreen(QWidget):
         self.combo_modelo.addItem("Ficha de Consulta Geral (Padrão)")
         try:
             conn = sqlite3.connect("consultorio.db")
+            conn.text_factory = str
             cursor = conn.cursor()
             cursor.execute("SELECT nome_modelo FROM modelos_fichas ORDER BY id DESC")
             modelos = cursor.fetchall()
@@ -241,6 +244,7 @@ class FichasScreen(QWidget):
         else:
             try:
                 conn = sqlite3.connect("consultorio.db")
+                conn.text_factory = str
                 cursor = conn.cursor()
                 cursor.execute("SELECT estrutura_json FROM modelos_fichas WHERE nome_modelo = ?", (nome_modelo,))
                 row = cursor.fetchone()
@@ -454,6 +458,7 @@ class FichasScreen(QWidget):
         
         try:
             conn = sqlite3.connect("consultorio.db")
+            conn.text_factory = str
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO modelos_fichas (nome_modelo, estrutura_json)
@@ -626,6 +631,7 @@ class FichasScreen(QWidget):
         
         try:
             conn = sqlite3.connect("consultorio.db")
+            conn.text_factory = str
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO fichas_preenchidas (paciente_id, modelo_nome, dados_respostas, data_atendimento)
@@ -633,6 +639,13 @@ class FichasScreen(QWidget):
             """, (paciente_id, modelo_nome, string_respostas, data_atual))
             conn.commit()
             conn.close()
+            
+            # Limpa os campos após salvar com sucesso para indicar ação concluída
+            for tipo, widget in self.widgets_dinamicos.values():
+                if tipo == "texto_curto": widget.clear()
+                elif tipo == "texto_longo": widget.clear()
+                elif tipo == "checkbox": widget.setChecked(False)
+                
             self.exibir_popup("info", "Ficha Salva", "O atendimento foi registrado com sucesso!")
         except Exception as e:
             self.exibir_popup("erro", "Erro", f"Falha no banco de dados:\n{str(e)}")
