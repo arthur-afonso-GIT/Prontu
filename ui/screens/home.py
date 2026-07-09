@@ -1,8 +1,10 @@
 import sqlite3
+import os
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QFrame, QTableWidget, QHeaderView, QPushButton, 
                                QInputDialog, QMessageBox, QTableWidgetItem)
 from PySide6.QtCore import Qt, QDate
+from database import Database
 
 class HomeScreen(QWidget):
     def __init__(self, window_principal, on_novo_paciente_click=None, on_pasta_click=None):
@@ -11,26 +13,28 @@ class HomeScreen(QWidget):
         self.window_principal = window_principal
         self.on_novo_paciente_click = on_novo_paciente_click
         self.on_pasta_click = on_pasta_click
+        self.db = Database()  # Gerenciador de banco seguro
         
         # Layout Principal
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(25, 25, 25, 25)
         main_layout.setSpacing(25)
         
-        # --- 1. CABEÇALHO ---
+        # --- 1. CABEÇALHO DINÂMICO ---
         header_layout = QHBoxLayout()
         welcome_vbox = QVBoxLayout()
         
         hoje_extenso = QDate.currentDate().toString("dd 'de' MMMM 'de' yyyy")
         
-        title = QLabel("Olá, Dra. Laura")
-        title.setStyleSheet("font-size: 24px; font-weight: bold; color: #0f172a;")
+        # Labels como atributos de classe (self.) para permitir atualização em tempo real
+        self.title = QLabel("Olá,")
+        self.title.setStyleSheet("font-size: 24px; font-weight: bold; color: #0f172a;")
         
-        subtitle = QLabel(f"Bem-vinda de volta. Aqui está o resumo para hoje, {hoje_extenso}.")
-        subtitle.setStyleSheet("font-size: 14px; color: #64748b;")
+        self.subtitle = QLabel(f"Bem-vindo(a) de volta. Aqui está o resumo para hoje, {hoje_extenso}.")
+        self.subtitle.setStyleSheet("font-size: 14px; color: #64748b;")
         
-        welcome_vbox.addWidget(title)
-        welcome_vbox.addWidget(subtitle)
+        welcome_vbox.addWidget(self.title)
+        welcome_vbox.addWidget(self.subtitle)
         header_layout.addLayout(welcome_vbox)
         
         btn_novo_paciente = QPushButton("➕ Novo Paciente")
@@ -134,6 +138,21 @@ class HomeScreen(QWidget):
         
         main_layout.addLayout(split_tables_layout)
         main_layout.addStretch()
+        
+        # Inicializa a saudação correta do banco
+        self.atualizar_saudacao_dinamica()
+
+    def atualizar_saudacao_dinamica(self):
+        """Busca o nome configurado na tabela e renderiza de forma elegante."""
+        nome_medico = self.db.obter_nome_profissional()
+        hoje_extenso = QDate.currentDate().toString("dd 'de' MMMM 'de' yyyy")
+        
+        if nome_medico:
+            self.title.setText(f"Olá, {nome_medico}")
+            self.subtitle.setText(f"Aqui está o resumo do seu consultório para hoje, {hoje_extenso}.")
+        else:
+            self.title.setText("Olá,")
+            self.subtitle.setText(f"Bem-vindo(a) de volta. Aqui está o resumo para hoje, {hoje_extenso}.")
 
     def renderizar_lista_pastas(self):
         while self.pastas_grid_layout.count():
@@ -159,7 +178,7 @@ class HomeScreen(QWidget):
 
     def contar_pacientes_na_pasta_sqlite(self, nome_pasta):
         try:
-            conn = sqlite3.connect("consultorio.db")
+            conn = self.db.conectar()
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM pacientes WHERE UPPER(pasta) = ?", (nome_pasta.strip().upper(),))
             total = cursor.fetchone()[0]
@@ -171,8 +190,15 @@ class HomeScreen(QWidget):
     def carregar_dados_iniciais(self):
         try:
             self.table_recentes.setRowCount(0)
-            conn = sqlite3.connect("consultorio.db")
+            conn = self.db.conectar()
             cursor = conn.cursor()
+            
+            # Atualiza o Card Dinâmico de total de pacientes
+            cursor.execute("SELECT COUNT(*) FROM pacientes")
+            total_p = cursor.fetchone()[0]
+            self.card_pacientes.set_valor(str(total_p))
+            
+            # Pacientes recentes adicionados
             cursor.execute("SELECT nome, pasta FROM pacientes ORDER BY id DESC LIMIT 4")
             rows_pacientes = cursor.fetchall()
             
@@ -184,20 +210,24 @@ class HomeScreen(QWidget):
             self.table_agenda_resumo.setRowCount(0)
             hoje_iso = QDate.currentDate().toString("yyyy-MM-dd")
             
-            cursor.execute("SELECT horario, paciente, status FROM agenda WHERE data = ? ORDER BY horario ASC", (hoje_iso,))
+            # Consultas de hoje vindas da tabela agendamentos
+            cursor.execute("SELECT horario, paciente_nome, status FROM agendamentos WHERE data = ? ORDER BY horario ASC", (hoje_iso,))
             rows_agenda = cursor.fetchall()
+            
+            # Atualiza o Card Dinâmico de consultas do dia
+            self.card_consultas.set_valor(str(len(rows_agenda)))
+            
             conn.close()
             
             for r_idx, (hora, pac, status) in enumerate(rows_agenda):
                 self.table_agenda_resumo.insertRow(r_idx)
                 self.table_agenda_resumo.setItem(r_idx, 0, QTableWidgetItem(str(hora)))
                 self.table_agenda_resumo.setItem(r_idx, 1, QTableWidgetItem(str(pac).upper()))
-                self.table_agenda_resumo.setItem(r_idx, 2, QTableWidgetItem(str(status)))
+                self.table_agenda_resumo.setItem(r_idx, 2, QTableWidgetItem(str(status if status else "Agendado")))
         except Exception as e:
             print(f"Erro ao inicializar tabelas reais da home: {e}")
 
     def acao_criar_nova_pasta(self):
-        # 🎨 CORREÇÃO DO POP-UP: Estilo completo e limpo para impedir textos invisíveis e desalinhamentos
         dialog = QInputDialog(self)
         dialog.setWindowTitle("Nova Pasta")
         dialog.setLabelText("Digite o nome da especialidade ou grupo:")
@@ -229,7 +259,6 @@ class HomeScreen(QWidget):
             QMessageBox.warning(self, "Aviso", "A pasta padrão 'Geral' não pode ser renomeada.")
             return
 
-        # 🎨 CORREÇÃO CRÍTICA DO POP-UP: Força o estilo unificado para o campo e botões do sistema
         dialog = QInputDialog(self)
         dialog.setWindowTitle("Editar Pasta")
         dialog.setLabelText(f"Alterar o nome da pasta '{nome_antigo}' para:")
@@ -284,7 +313,7 @@ class HomeScreen(QWidget):
 
     def atualizar_pasta_dos_pacientes_sqlite(self, de_pasta, para_pasta):
         try:
-            conn = sqlite3.connect("consultorio.db")
+            conn = self.db.conectar()
             cursor = conn.cursor()
             cursor.execute("UPDATE pacientes SET pasta = ? WHERE pasta = ?", (para_pasta, de_pasta))
             conn.commit()

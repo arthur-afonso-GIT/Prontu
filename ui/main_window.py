@@ -1,4 +1,6 @@
 import sqlite3
+import os
+import sys # <--- IMPORTANTE: Adicionado para detectar o PyInstaller
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
                                QPushButton, QStackedWidget, QLabel, QFrame)
 from PySide6.QtCore import Qt
@@ -6,11 +8,31 @@ from PySide6.QtCore import Qt
 from ui.screens.home import HomeScreen
 from ui.screens.pacientes import PacientesScreen
 from ui.screens.agenda import AgendaScreen 
+from ui.screens.configuracoes import ConfiguracoesScreen
 
 try:
     from ui.screens.fichas import FichasScreen
 except ImportError:
     FichasScreen = QWidget
+
+# =====================================================================
+# PASSO 4: FUNÇÃO PARA DETECTAR O CAMINHO SEGURO DO BANCO DE DADOS
+# =====================================================================
+def obter_caminho_db():
+    """
+    Retorna o caminho absoluto para o banco de dados.
+    Se o app estiver rodando como .exe (PyInstaller), salva na mesma pasta do .exe.
+    Se estiver rodando como script Python, salva na raiz do projeto.
+    """
+    if hasattr(sys, '_MEIPASS'):
+        # Quando compilado, sys.executable aponta para o caminho do arquivo .exe
+        base_path = os.path.dirname(sys.executable)
+    else:
+        # Quando em modo de desenvolvimento, pega a pasta raiz do projeto (um nível acima de /ui)
+        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    
+    return os.path.join(base_path, "consultorio.db")
+# =====================================================================
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -18,9 +40,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Prontu — Prontuário Médico Inteligente")
         self.resize(1200, 750)
         
+        # Inicializa as estruturas de base de dados e carrega pastas
         self.init_db_estruturas()
         self.pastas_sistema = self.carregar_pastas_sqlite()
         
+        # Widget central e Layout Principal da Janela
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
@@ -51,6 +75,7 @@ class MainWindow(QMainWindow):
         logo.setStyleSheet("color: white; font-size: 22px; font-weight: bold; margin-bottom: 25px; padding-left: 10px;")
         sidebar_layout.addWidget(logo)
         
+        # Botões do Menu Lateral
         self.btn_home = QPushButton("🏠 Home / Painel")
         self.btn_home.setCheckable(True)
         self.btn_home.setChecked(True)
@@ -85,6 +110,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.stack.setStyleSheet("background-color: #f8fafc;")
         
+        # Instanciação de todas as Telas
         self.screen_home = HomeScreen(
             window_principal=self,
             on_novo_paciente_click=self.ir_para_tela_pacientes,
@@ -93,8 +119,9 @@ class MainWindow(QMainWindow):
         self.screen_pacientes = PacientesScreen()
         self.screen_agenda = AgendaScreen()
         self.screen_fichas = FichasScreen() 
-        self.screen_config = QWidget()
+        self.screen_config = ConfiguracoesScreen(window_principal=self)
         
+        # Adiciona os Widgets à Pilha
         self.stack.addWidget(self.screen_home)
         self.stack.addWidget(self.screen_pacientes)
         self.stack.addWidget(self.screen_agenda)
@@ -103,7 +130,7 @@ class MainWindow(QMainWindow):
         
         main_layout.addWidget(self.stack)
         
-        # Inicializações de dados com tratamento contra falhas
+        # Inicializações de dados automáticas com tratamento contra falhas
         try:
             self.screen_pacientes.atualizar_combobox_pastas(self.pastas_sistema)
             self.atualizar_sugestoes_agenda()
@@ -115,7 +142,8 @@ class MainWindow(QMainWindow):
     def atualizar_sugestoes_agenda(self):
         nomes_iniciais = []
         try:
-            conn = sqlite3.connect("consultorio.db")
+            # CAMINHO CORRIGIDO AQUI
+            conn = sqlite3.connect(obter_caminho_db())
             cursor = conn.cursor()
             cursor.execute("SELECT nome FROM pacientes")
             nomes_iniciais = [row[0].upper() for row in cursor.fetchall()]
@@ -134,7 +162,7 @@ class MainWindow(QMainWindow):
                 if btn:
                     btn.setChecked(btn == botao_clicado)
             
-            # Gatilhos protegidos para evitar travar o layout da Sidebar
+            # Gatilhos protegidos para atualizar dados ao navegar entre abas
             if destino_widget == self.screen_home:
                 self.atualizar_dados_home()
             elif destino_widget == self.screen_fichas:
@@ -158,24 +186,29 @@ class MainWindow(QMainWindow):
 
     def atualizar_dados_home(self):
         try:
-            conn = sqlite3.connect("consultorio.db")
+            # CAMINHO CORRIGIDO AQUI
+            conn = sqlite3.connect(obter_caminho_db())
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM pacientes")
             total_pacientes = cursor.fetchone()[0]
+            
             from PySide6.QtCore import QDate
             hoje_iso = QDate.currentDate().toString("yyyy-MM-dd")
             cursor.execute("SELECT COUNT(*) FROM agenda WHERE data = ?", (hoje_iso,))
             total_consultas = cursor.fetchone()[0]
             conn.close()
             
-            self.screen_home.card_pacientes.set_valor(str(total_pacientes))
-            self.screen_home.card_consultas.set_valor(str(total_consultas))
+            if hasattr(self.screen_home, "card_pacientes"):
+                self.screen_home.card_pacientes.set_valor(str(total_pacientes))
+            if hasattr(self.screen_home, "card_consultas"):
+                self.screen_home.card_consultas.set_valor(str(total_consultas))
         except:
             pass
 
     def init_db_estruturas(self):
         try:
-            conn = sqlite3.connect("consultorio.db")
+            # CAMINHO CORRIGIDO AQUI
+            conn = sqlite3.connect(obter_caminho_db())
             cursor = conn.cursor()
             cursor.execute("CREATE TABLE IF NOT EXISTS pastas (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT UNIQUE NOT NULL)")
             cursor.execute("CREATE TABLE IF NOT EXISTS agenda (id INTEGER PRIMARY KEY AUTOINCREMENT, horario TEXT NOT NULL, data TEXT NOT NULL, paciente TEXT NOT NULL, status TEXT NOT NULL)")
@@ -190,7 +223,8 @@ class MainWindow(QMainWindow):
 
     def carregar_pastas_sqlite(self):
         try:
-            conn = sqlite3.connect("consultorio.db")
+            # CAMINHO CORRIGIDO AQUI
+            conn = sqlite3.connect(obter_caminho_db())
             cursor = conn.cursor()
             cursor.execute("SELECT nome FROM pastas ORDER BY nome ASC")
             rows = cursor.fetchall()
@@ -209,7 +243,8 @@ class MainWindow(QMainWindow):
     def sincronizar_pastas_sistema(self, nova_lista):
         try:
             self.pastas_sistema = sorted(list(set(nova_lista)))
-            conn = sqlite3.connect("consultorio.db")
+            # CAMINHO CORRIGIDO AQUI
+            conn = sqlite3.connect(obter_caminho_db())
             cursor = conn.cursor()
             cursor.execute("DELETE FROM pastas")
             for pasta in self.pastas_sistema:

@@ -2,8 +2,17 @@ import sqlite3
 import os
 
 class Database:
-    def __init__(self, db_name="prontu.db"):
-        self.db_name = db_name
+    def __init__(self, db_name=None):
+        """Inicialização segura comercial na pasta AppData do usuário."""
+        if db_name is None:
+            appdata = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
+            pasta_app = os.path.join(appdata, "ProntuApp")
+            if not os.path.exists(pasta_app):
+                os.makedirs(pasta_app)
+            self.db_name = os.path.join(pasta_app, "prontu.db")
+        else:
+            self.db_name = db_name
+            
         self.init_db()
 
     def conectar(self):
@@ -29,25 +38,49 @@ class Database:
             )
         """)
         
-        # 2. Tabela de Agendamentos (Ligada ao ID do paciente)
+        # 2. Tabela de Agendamentos estruturada para persistência em JSON
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS agendamentos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                paciente_nome TEXT NOT NULL,
-                data TEXT NOT NULL,
-                horario TEXT NOT NULL,
-                duracao TEXT,
-                procedimento TEXT,
-                status TEXT,
-                observacoes TEXT
+                data TEXT,
+                hora TEXT,
+                dados TEXT,
+                PRIMARY KEY (data, hora)
+            )
+        """)
+        
+        # 3. Tabela de Configurações do Sistema
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS configuracoes (
+                chave TEXT PRIMARY KEY,
+                valor TEXT
             )
         """)
         
         conn.commit()
         conn.close()
 
+    # --- FUNÇÕES DE CONFIGURAÇÃO (Sincronizadas em Português) ---
+    def obter_nome_profissional(self):
+        """Recupera o nome salvo do médico/profissional."""
+        conn = self.conectar()
+        cursor = conn.cursor()
+        cursor.execute("SELECT valor FROM configuracoes WHERE chave = 'nome_profissional'")
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else ""
+
+    def salvar_nome_profissional(self, nome):
+        """Salva ou atualiza o nome do médico/profissional."""
+        conn = self.conectar()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO configuracoes (chave, valor)
+            VALUES ('nome_profissional', ?)
+        """, (nome.strip(),))
+        conn.commit()
+        conn.close()
+
     # --- FUNÇÕES PARA PACIENTES ---
-    
     def salvar_paciente(self, dados):
         """Insere um novo paciente no banco de dados."""
         conn = self.conectar()
