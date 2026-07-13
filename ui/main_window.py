@@ -20,20 +20,21 @@ except ImportError:
 # =====================================================================
 def obter_caminho_db():
     """
-    Retorna o caminho absoluto para o banco de dados.
-    Se o app estiver rodando como .exe (PyInstaller), salva na mesma pasta do .exe.
-    Se estiver rodando como script Python, salva na raiz do projeto.
+    Retorna o caminho absoluto e seguro para o banco de dados.
+    Se estiver compilado (PyInstaller), salva na pasta AppData/Local/Prontu do usuário,
+    evitando erros de permissão de escrita no 'Arquivos de Programas'.
+    Se estiver em desenvolvimento, salva na raiz do projeto.
     """
     if hasattr(sys, '_MEIPASS'):
-        # Quando compilado, sys.executable aponta para o caminho do arquivo .exe
-        base_path = os.path.dirname(sys.executable)
+        # Caminho comercial seguro: C:\Users\NomeUsuario\AppData\Local\Prontu
+        appdata_local = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'Prontu')
+        # Garante que a pasta 'Prontu' exista dentro do AppData antes de criar o arquivo
+        os.makedirs(appdata_local, exist_ok=True)
+        return os.path.join(appdata_local, "consultorio.db")
     else:
-        # Quando em modo de desenvolvimento, pega a pasta raiz do projeto (um nível acima de /ui)
+        # Modo desenvolvimento: Raiz do projeto
         base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    
-    return os.path.join(base_path, "consultorio.db")
-# =====================================================================
-
+        return os.path.join(base_path, "consultorio.db")
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
