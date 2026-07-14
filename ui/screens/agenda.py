@@ -1,6 +1,4 @@
-import sqlite3
 import json
-import os
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QComboBox, QFrame, 
                                QMessageBox, QCalendarWidget, QScrollArea,
@@ -9,7 +7,6 @@ from PySide6.QtCore import Qt, QDate, QTime, QDateTime, QPoint
 from database import Database
 
 class AgendaScreen(QWidget):
-    # Grade fixa de horários (07:00 às 19:00, blocos de 30 min).
     HORARIOS_GRADE = [
         "07:00", "07:30", "08:00", "08:30", "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
         "12:00", "12:30", "13:00", "13:30", "14:00", "14:30", "15:00", "15:30", "16:00", "16:30",
@@ -19,17 +16,21 @@ class AgendaScreen(QWidget):
     def __init__(self):
         super().__init__()
         
-        # Garante cor padrão de texto escura para a tela toda contra bugs de tema do Windows
         self.setStyleSheet("color: #0f172a;")
-        
-        # Instanciação do gerenciador compartilhado comercial seguro
         self.db_gerenciador = Database()
         
-        self.data_visualizada = QDate.currentDate()
-        self.lista_pacientes_disponiveis = []  # Guarda a lista mestre (todos os cadastrados)
+        # Garante que o consultorio_id esteja sempre disponível nesta instância
+        if not hasattr(self.db_gerenciador, 'consultorio_id') or not self.db_gerenciador.consultorio_id:
+            try:
+                from config_app import CONSULTORIO_ID
+                self.db_gerenciador.consultorio_id = CONSULTORIO_ID
+            except ImportError:
+                self.db_gerenciador.consultorio_id = 1
         
-        # Inicializa a Base de Dados Comercial e carrega os agendamentos persistidos
-        self.init_database()
+        self.data_visualizada = QDate.currentDate()
+        self.lista_pacientes_disponiveis = []
+        self.db_agendamentos = {}
+        
         self.carregar_agendamentos_db()
         
         # Layout Principal
@@ -37,13 +38,12 @@ class AgendaScreen(QWidget):
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(25)
         
-        # --- COLUNA DA ESQUERDA: NAVEGAÇÃO DE DATA E GRADE DE HORÁRIOS ---
+        # --- COLUNA DA ESQUERDA: CALENDÁRIO ---
         left_container = QWidget()
         left_layout = QVBoxLayout(left_container)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(15)
         
-        # Seletor de Data Superior
         self.date_selector_container = QFrame()
         self.date_selector_container.setStyleSheet("QFrame { background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; }")
         selector_layout = QHBoxLayout(self.date_selector_container)
@@ -97,7 +97,6 @@ class AgendaScreen(QWidget):
         selector_layout.addWidget(self.btn_next_day)
         left_layout.addWidget(self.date_selector_container)
         
-        # --- ÁREA SCROLLÁVEL DO CALENDÁRIO ---
         self.scroll_agenda = QScrollArea()
         self.scroll_agenda.setWidgetResizable(True)
         self.scroll_agenda.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
@@ -186,57 +185,93 @@ class AgendaScreen(QWidget):
         self.atualizar_visualizacao_data()
         self.renderizar_timeline_calendario()
 
-    def init_database(self):
-        """Usa a tabela compartilhada para persistir os horários em strings JSON estruturadas."""
-        conn = self.db_gerenciador.conectar()
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS agendamentos (
-                data TEXT,
-                hora TEXT,
-                dados TEXT,
-                PRIMARY KEY (data, hora)
-            )
-        """)
-        conn.commit()
-        conn.close()
+    def carregar_lista_pacientes_combobox(self):
+        """Busca em tempo real a listagem de nomes cadastrados no Supabase para sugestões."""
+        try:
+            if hasattr(self.db_gerenciador, 'buscar_nomes_pacientes'):
+                nomes = self.db_gerenciador.buscar_nomes_pacientes()
+                self.atualizar_lista_sugestoes(nomes)
+            elif hasattr(self.db_gerenciador, 'supabase') and self.db_gerenciador.supabase:
+                resposta = self.db_gerenciador.supabase.table("pacientes")\
+                    .select("nome")\
+                    .eq("consultorio_id", self.db_gerenciador.consultorio_id)\
+                    .execute()
+                nomes = [row["nome"] for row in resposta.data] if resposta.data else []
+                self.atualizar_lista_sugestoes(nomes)
+        except Exception as e:
+            print(f"Erro ao popular combo de pacientes na Agenda: {e}")
 
     def carregar_agendamentos_db(self):
-        """Carrega todos os agendamentos gravados na base de dados para o dicionário da aplicação."""
+        """Carrega todos os agendamentos cadastrados no Supabase para o consultório atual."""
         self.db_agendamentos = {}
-        conn = self.db_gerenciador.conectar()
-        cursor = conn.cursor()
-        cursor.execute("SELECT data, hora, dados FROM agendamentos")
-        rows = cursor.fetchall()
-        for data, hora, dados_str in rows:
-            if data not in self.db_agendamentos:
-                self.db_agendamentos[data] = {}
-            self.db_agendamentos[data][hora] = json.loads(dados_str)
-        conn.close()
+        if not self.db_gerenciador.supabase:
+            return
+        try:
+            resposta = self.db_gerenciador.supabase.table("agenda")\
+                .select("data, horario, paciente, status, procedimento, duracao_txt, observacao, tipo_bloco, slots_vinculados")\
+                .eq("consultorio_id", self.db_gerenciador.consultorio_id)\
+                .execute()
+                
+            if resposta.data:
+                for row in resposta.data:
+                    data = row["data"]
+                    hora = row["horario"]
+                    if data not in self.db_agendamentos:
+                        self.db_agendamentos[data] = {}
+                        
+                    self.db_agendamentos[data][hora] = {
+                        "tipo_bloco": row["tipo_bloco"],
+                        "paciente": row["paciente"],
+                        "status": row["status"],
+                        "procedimento": row["procedimento"],
+                        "duracao_txt": row["duracao_txt"],
+                        "observacao": row["observacao"],
+                        "slots_vinculados": json.loads(row["slots_vinculados"]) if row["slots_vinculados"] else []
+                    }
+        except Exception as e:
+            print(f"Erro ao carregar agendamentos do Supabase: {e}")
 
     def salvar_agendamento_no_db(self, data, hora, dados_dict):
-        """Insere ou atualiza um bloco de agendamento no banco de dados SQLite."""
-        conn = self.db_gerenciador.conectar()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO agendamentos (data, hora, dados) VALUES (?, ?, ?)",
-            (data, hora, json.dumps(dados_dict))
-        )
-        conn.commit()
-        conn.close()
+        """Grava ou atualiza de maneira atômica o agendamento na nuvem."""
+        if not self.db_gerenciador.supabase:
+            return
+        try:
+            payload = {
+                "consultorio_id": self.db_gerenciador.consultorio_id,
+                "data": data,
+                "horario": hora,
+                "paciente": dados_dict.get("paciente", ""),
+                "status": dados_dict.get("status", ""),
+                "procedimento": dados_dict.get("procedimento", ""),
+                "duracao_txt": dados_dict.get("duracao_txt", ""),
+                "observacao": dados_dict.get("observacao", ""),
+                "tipo_bloco": dados_dict.get("tipo_bloco", ""),
+                "slots_vinculados": json.dumps(dados_dict.get("slots_vinculados", []))
+            }
+            # Upsert estruturado por consultório, data e horário
+            self.db_gerenciador.supabase.table("agenda").upsert(
+                payload, 
+                on_conflict="consultorio_id,data,horario"
+            ).execute()
+        except Exception as e:
+            print(f"Erro ao salvar agendamento no Supabase: {e}")
 
     def remover_agendamento_do_db(self, data, hora):
-        """Remove um bloco de horário específico da base de dados SQLite."""
-        conn = self.db_gerenciador.conectar()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM agendamentos WHERE data = ? AND hora = ?", (data, hora))
-        conn.commit()
-        conn.close()
+        """Apaga o slot da nuvem de forma imediata."""
+        if not self.db_gerenciador.supabase:
+            return
+        try:
+            self.db_gerenciador.supabase.table("agenda")\
+                .delete()\
+                .eq("consultorio_id", self.db_gerenciador.consultorio_id)\
+                .eq("data", data)\
+                .eq("horario", hora)\
+                .execute()
+        except Exception as e:
+            print(f"Erro ao deletar agendamento: {e}")
 
     def atualizar_lista_sugestoes(self, nomes_pacientes):
-        """Atualiza a lista mestra de pacientes cadastrados vindos do arquivo principal."""
         self.lista_pacientes_disponiveis = sorted(list(set(nomes_pacientes)))
-        
         self.input_paciente.blockSignals(True)
         self.input_paciente.clear()
         self.input_paciente.addItems(self.lista_pacientes_disponiveis)
@@ -244,9 +279,7 @@ class AgendaScreen(QWidget):
         self.input_paciente.blockSignals(False)
 
     def filtrar_pacientes_ao_digitar(self, texto_digitado):
-        """Filtra a ComboBox em tempo real SEM auto-selecionar o primeiro item."""
         texto_norm = texto_digitado.strip().lower()
-        
         self.input_paciente.blockSignals(True)
         self.input_paciente.clear()
         
@@ -259,7 +292,6 @@ class AgendaScreen(QWidget):
             self.input_paciente.addItems(filtrados)
             self.input_paciente.setCurrentIndex(-1)
             self.input_paciente.setEditText(texto_digitado)
-            
             if filtrados:
                 self.input_paciente.showPopup()
                 
@@ -494,7 +526,12 @@ class AgendaScreen(QWidget):
             bloco_continua = {
                 "tipo_bloco": "continua",
                 "paciente": paciente.upper(),
-                "hora_origem": hora_inicial_str
+                "hora_origem": hora_inicial_str,
+                "status": "",
+                "procedimento": "",
+                "duracao_txt": "",
+                "observacao": "",
+                "slots_vinculados": []
             }
             self.db_agendamentos[str_data][slot_sequencia] = bloco_continua
             self.salvar_agendamento_no_db(str_data, slot_sequencia, bloco_continua)
@@ -529,6 +566,7 @@ class AgendaScreen(QWidget):
         if msg.exec() != QMessageBox.StandardButton.Yes:
             return
 
+        # Deleta todos os slots associados a essa consulta
         for slot in dados["slots_vinculados"]:
             if slot in self.db_agendamentos[str_data]:
                 del self.db_agendamentos[str_data][slot]

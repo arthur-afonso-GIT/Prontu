@@ -1,11 +1,11 @@
 import os
-import sqlite3
 import json
 from datetime import datetime
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QComboBox, QScrollArea, 
                                QFrame, QCheckBox, QTextEdit, QFileDialog, QMessageBox, QListView, QDialog)
 from PySide6.QtCore import Qt
+from database import Database  # Importa o gerenciador de banco de dados unificado
 
 try:
     from docx import Document
@@ -69,7 +69,7 @@ class FichasScreen(QWidget):
     def __init__(self):
         super().__init__()
         
-        self.init_db()
+        self.db = Database()  # Instancia a conexão unificada com o Supabase
         self.modelo_atual_campos = [] 
         self.widgets_dinamicos = {}   
         self.modo_criacao = False 
@@ -172,69 +172,52 @@ class FichasScreen(QWidget):
         
         self.main_layout.addWidget(self.right_container, stretch=3)
         
-        # Ordem de inicialização segura
+        # Inicialização Segura baseada no Supabase
         self.carregar_modelos_iniciais_combo()
         self.carregar_pacientes_combo()
         self.gerar_modelo_padrao()
         
-        # Conecta o sinal após popular os itens iniciais para evitar disparos acidentais no boot
         self.combo_modelo.currentTextChanged.connect(self.alterar_modelo_ficha)
-
-    def init_db(self):
-        try:
-            conn = sqlite3.connect("consultorio.db")
-            conn.text_factory = str
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS fichas_preenchidas (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    paciente_id INTEGER,
-                    modelo_nome TEXT,
-                    dados_respostas TEXT,
-                    data_atendimento TEXT
-                )
-            """)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS modelos_fichas (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    nome_modelo TEXT UNIQUE,
-                    estrutura_json TEXT
-                )
-            """)
-            conn.commit()
-            conn.close()
-        except:
-            pass
 
     def carregar_pacientes_combo(self):
         self.combo_paciente.clear()
+        if not self.db.supabase:
+            return
         try:
-            conn = sqlite3.connect("consultorio.db")
-            conn.text_factory = str
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, nome FROM pacientes ORDER BY nome ASC")
-            rows = cursor.fetchall()
-            conn.close()
-            for row in rows:
-                self.combo_paciente.addItem(f"👤 {row[1]} (ID: {row[0]})", row[0])
-        except:
+            # Seleciona os pacientes vinculados ao consultório logado
+            resposta = self.db.supabase.table("pacientes")\
+                .select("id, nome")\
+                .eq("consultorio_id", self.db.consultorio_id)\
+                .order("nome", desc=False)\
+                .execute()
+                
+            if resposta.data:
+                for row in resposta.data:
+                    self.combo_paciente.addItem(f"👤 {row['nome']} (ID: {row['id']})", row['id'])
+            else:
+                self.combo_paciente.addItem("Nenhum paciente cadastrado")
+        except Exception as e:
+            print(f"Erro ao carregar pacientes do Supabase: {e}")
             self.combo_paciente.addItem("Nenhum paciente cadastrado")
 
     def carregar_modelos_iniciais_combo(self):
-        """Popula o combobox limpando itens antigos e trazendo os registros do banco"""
+        """Busca modelos de ficha cadastrados na nuvem para o consultório logado."""
         self.combo_modelo.clear()
         self.combo_modelo.addItem("Ficha de Consulta Geral (Padrão)")
+        if not self.db.supabase:
+            return
         try:
-            conn = sqlite3.connect("consultorio.db")
-            conn.text_factory = str
-            cursor = conn.cursor()
-            cursor.execute("SELECT nome_modelo FROM modelos_fichas ORDER BY id DESC")
-            modelos = cursor.fetchall()
-            conn.close()
-            for m in modelos:
-                self.combo_modelo.addItem(m[0])
-        except:
-            pass
+            resposta = self.db.supabase.table("modelos_fichas")\
+                .select("nome_modelo")\
+                .eq("consultorio_id", self.db.consultorio_id)\
+                .order("id", desc=True)\
+                .execute()
+                
+            if resposta.data:
+                for m in resposta.data:
+                    self.combo_modelo.addItem(m["nome_modelo"])
+        except Exception as e:
+            print(f"Erro ao carregar modelos do Supabase: {e}")
 
     def alterar_modelo_ficha(self, nome_modelo):
         if self.modo_criacao or not nome_modelo:
@@ -242,18 +225,21 @@ class FichasScreen(QWidget):
         if "Padrão" in nome_modelo:
             self.gerar_modelo_padrao()
         else:
+            if not self.db.supabase:
+                return
             try:
-                conn = sqlite3.connect("consultorio.db")
-                conn.text_factory = str
-                cursor = conn.cursor()
-                cursor.execute("SELECT estrutura_json FROM modelos_fichas WHERE nome_modelo = ?", (nome_modelo,))
-                row = cursor.fetchone()
-                conn.close()
-                if row:
-                    self.modelo_atual_campos = json.loads(row[0])
+                resposta = self.db.supabase.table("modelos_fichas")\
+                    .select("estrutura_json")\
+                    .eq("consultorio_id", self.db.consultorio_id)\
+                    .eq("nome_modelo", nome_modelo)\
+                    .maybe_single()\
+                    .execute()
+                    
+                if resposta.data:
+                    self.modelo_atual_campos = json.loads(resposta.data["estrutura_json"])
                     self.renderizar_formulario_dinamico()
-            except:
-                pass
+            except Exception as e:
+                print(f"Erro ao obter modelo de ficha: {e}")
 
     def exibir_popup(self, tipo, titulo, mensagem):
         msg = QMessageBox(self)
@@ -456,24 +442,24 @@ class FichasScreen(QWidget):
             
         estrutura_json = json.dumps(self.modelo_atual_campos, ensure_ascii=False)
         
+        if not self.db.supabase:
+            return
+            
         try:
-            conn = sqlite3.connect("consultorio.db")
-            conn.text_factory = str
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT OR REPLACE INTO modelos_fichas (nome_modelo, estrutura_json)
-                VALUES (?, ?)
-            """, (nome_modelo, estrutura_json))
-            conn.commit()
-            conn.close()
+            payload = {
+                "consultorio_id": self.db.consultorio_id,
+                "nome_modelo": nome_modelo,
+                "estrutura_json": estrutura_json
+            }
             
-            # Desativa o modo construtor de forma limpa
+            # Executa o upsert para evitar duplicações de modelos dentro do mesmo consultório
+            self.db.supabase.table("modelos_fichas").upsert(
+                payload, 
+                on_conflict="consultorio_id,nome_modelo"
+            ).execute()
+            
             self.modo_criacao = False
-            
-            # Recarrega a combobox lateral trazendo os itens novos atualizados da database
             self.carregar_modelos_iniciais_combo()
-            
-            # Seleciona automaticamente o modelo criado e renderiza na tela pronto para preenchimento
             self.combo_modelo.setCurrentText(nome_modelo)
             self.renderizar_formulario_dinamico()
             
@@ -629,18 +615,21 @@ class FichasScreen(QWidget):
         modelo_nome = self.combo_modelo.currentText()
         data_atual = datetime.now().strftime("%d/%m/%Y %H:%M")
         
-        try:
-            conn = sqlite3.connect("consultorio.db")
-            conn.text_factory = str
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO fichas_preenchidas (paciente_id, modelo_nome, dados_respostas, data_atendimento)
-                VALUES (?, ?, ?, ?)
-            """, (paciente_id, modelo_nome, string_respostas, data_atual))
-            conn.commit()
-            conn.close()
+        if not self.db.supabase:
+            return
             
-            # Limpa os campos após salvar com sucesso para indicar ação concluída
+        try:
+            payload = {
+                "consultorio_id": self.db.consultorio_id,
+                "paciente_id": paciente_id,
+                "modelo_nome": modelo_nome,
+                "dados_respostas": string_respostas,
+                "data_atendimento": data_atual
+            }
+            
+            self.db.supabase.table("fichas_preenchidas").insert(payload).execute()
+            
+            # Limpa os campos após salvar com sucesso
             for tipo, widget in self.widgets_dinamicos.values():
                 if tipo == "texto_curto": widget.clear()
                 elif tipo == "texto_longo": widget.clear()

@@ -1,12 +1,12 @@
-import sqlite3
 import webbrowser
 import urllib.parse
 import json
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, 
                                QComboBox, QDateEdit, QHeaderView, QFrame, QTextEdit, QMessageBox, 
-                               QListWidget, QListWidgetItem, QDialog)  # <- CORRIGIDO AQUI
+                               QListWidget, QListWidgetItem, QDialog)
 from PySide6.QtCore import Qt, QDate
+from database import Database  # Importa o gerenciador de banco de dados unificado
 
 class VisualizarFichaHistoricoDialog(QDialog):
     """Janela pop-up para ler uma ficha clínica antiga do histórico"""
@@ -58,7 +58,7 @@ class PacientesScreen(QWidget):
     def __init__(self):
         super().__init__()
         
-        self.init_db()
+        self.db = Database()  # Instancia a conexão unificada com o Supabase
         
         self.id_em_edicao = -1
         self.row_em_edicao = -1
@@ -445,42 +445,6 @@ class PacientesScreen(QWidget):
         """)
         msg.exec()
 
-    def init_db(self):
-        try:
-            conn = sqlite3.connect("consultorio.db")
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS pacientes (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    nome TEXT,
-                    telefone TEXT,
-                    nascimento TEXT,
-                    convenio TEXT,
-                    pasta TEXT
-                )
-            """)
-            
-            novas_colunas = [
-                ("sexo", "TEXT"),
-                ("cpf", "TEXT"),
-                ("rg", "TEXT"),
-                ("estado_civil", "TEXT"),
-                ("profissao", "TEXT"),
-                ("endereco", "TEXT"),
-                ("queixa", "TEXT")
-            ]
-            
-            for col_nome, col_tipo in novas_colunas:
-                try:
-                    cursor.execute(f"ALTER TABLE pacientes ADD COLUMN {col_nome} {col_tipo}")
-                except sqlite3.OperationalError:
-                    pass
-                    
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print(f"Erro na migração do DB: {e}")
-
     def abrir_whatsapp_paciente(self):
         numero = "".join(c for c in self.input_tel.text().strip() if c.isdigit())
         if not numero:
@@ -497,19 +461,30 @@ class PacientesScreen(QWidget):
         rows = lista_customizada
         
         if rows is None:
+            if not self.db.supabase:
+                return
             try:
-                conn = sqlite3.connect("consultorio.db")
-                cursor = conn.cursor()
-                cursor.execute("SELECT id, nome, telefone, convenio, pasta FROM pacientes ORDER BY nome ASC")
-                rows = cursor.fetchall()
-                conn.close()
-            except:
+                resposta = self.db.supabase.table("pacientes")\
+                    .select("id, nome, telefone, convenio, pasta")\
+                    .eq("consultorio_id", self.db.consultorio_id)\
+                    .order("nome", desc=False)\
+                    .execute()
+                
+                if resposta.data:
+                    rows = [
+                        (r["id"], r.get("nome", ""), r.get("telefone", ""), r.get("convenio", ""), r.get("pasta", ""))
+                        for r in resposta.data
+                    ]
+                else:
+                    rows = []
+            except Exception as e:
+                print(f"Erro ao obter pacientes do Supabase: {e}")
                 rows = []
                 
         for row_idx, row_data in enumerate(rows):
             self.tabela.insertRow(row_idx)
             for col_idx, value in enumerate(row_data):
-                item = QTableWidgetItem(str(value))
+                item = QTableWidgetItem(str(value if value is not None else ""))
                 self.tabela.setItem(row_idx, col_idx, item)
 
     def carregar_paciente_selecionado(self):
@@ -521,64 +496,66 @@ class PacientesScreen(QWidget):
         self.row_em_edicao = self.tabela.currentRow()
         self.id_em_edicao = int(self.tabela.item(self.row_em_edicao, 0).text())
         
-        try:
-            conn = sqlite3.connect("consultorio.db")
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT nome, telefone, nascimento, convenio, pasta, 
-                       sexo, cpf, rg, estado_civil, profissao, endereco, queixa 
-                FROM pacientes WHERE id = ?
-            """, (self.id_em_edicao,))
-            p = cursor.fetchone()
-            conn.close()
+        if not self.db.supabase:
+            return
             
+        try:
+            resposta = self.db.supabase.table("pacientes")\
+                .select("nome, telefone, nascimento, convenio, pasta, sexo, cpf, rg, estado_civil, profissao, endereco, queixa")\
+                .eq("id", self.id_em_edicao)\
+                .eq("consultorio_id", self.db.consultorio_id)\
+                .maybe_single()\
+                .execute()
+            
+            p = resposta.data
             if p:
                 self.lbl_form_titulo.setText("📝 Editando Prontuário")
-                self.input_nome.setText(p[0] if p[0] else "")
-                self.input_tel.setText(p[1] if p[1] else "")
+                self.input_nome.setText(p.get("nome") or "")
+                self.input_tel.setText(p.get("telefone") or "")
                 
                 try:
-                    if p[2]:
-                        self.input_nasc.setDate(QDate.fromString(p[2], "yyyy-MM-dd"))
+                    nasc_str = p.get("nascimento")
+                    if nasc_str:
+                        self.input_nasc.setDate(QDate.fromString(nasc_str, "yyyy-MM-dd"))
                     else:
                         self.input_nasc.setDate(QDate(1990, 1, 1))
                 except:
                     self.input_nasc.setDate(QDate(1990, 1, 1))
                     
-                self.input_convenio.setText(p[3] if p[3] else "PARTICULAR")
-                self.input_pasta.setCurrentText(p[4] if p[4] else "")
-                self.input_sexo.setCurrentText(p[5] if p[5] else "Masculino")
-                self.input_cpf.setText(p[6] if p[6] else "")
-                self.input_rg.setText(p[7] if p[7] else "")
-                self.input_civil.setText(p[8] if p[8] else "")
-                self.input_profissao.setText(p[9] if p[9] else "")
-                self.input_endereco.setText(p[10] if p[10] else "")
-                self.input_qp.setPlainText(p[11] if p[11] else "")
+                self.input_convenio.setText(p.get("convenio") or "PARTICULAR")
+                self.input_pasta.setCurrentText(p.get("pasta") or "")
+                self.input_sexo.setCurrentText(p.get("sexo") or "Masculino")
+                self.input_cpf.setText(p.get("cpf") or "")
+                self.input_rg.setText(p.get("rg") or "")
+                self.input_civil.setText(p.get("estado_civil") or "")
+                self.input_profissao.setText(p.get("profissao") or "")
+                self.input_endereco.setText(p.get("endereco") or "")
+                self.input_qp.setPlainText(p.get("queixa") or "")
                 
                 self.btn_excluir.setVisible(True)
         except Exception as e:
             print(f"Erro ao carregar dados de texto do paciente: {e}")
             
-        # Fora do bloco Try/Except principal: as fichas carregarão mesmo com pendências de tabela
         self.carregar_historico_fichas_paciente(self.id_em_edicao)
 
     def carregar_historico_fichas_paciente(self, p_id):
         self.list_historico_fichas.clear()
+        if not self.db.supabase:
+            return
         try:
-            conn = sqlite3.connect("consultorio.db")
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, modelo_nome, data_atendimento, dados_respostas 
-                FROM fichas_preenchidas WHERE paciente_id = ? ORDER BY id DESC
-            """, (p_id,))
+            resposta = self.db.supabase.table("fichas_preenchidas")\
+                .select("id, modelo_nome, data_atendimento, dados_respostas")\
+                .eq("paciente_id", p_id)\
+                .eq("consultorio_id", self.db.consultorio_id)\
+                .order("id", desc=True)\
+                .execute()
             
-            fichas = cursor.fetchall()
-            conn.close()
-            
-            for f in fichas:
-                w_item = QListWidgetItem(f"📄 {f[1]} ({f[2]})")
-                w_item.setData(Qt.UserRole, f)
-                self.list_historico_fichas.addItem(w_item)
+            if resposta.data:
+                for f in resposta.data:
+                    w_item = QListWidgetItem(f"📄 {f['modelo_nome']} ({f['data_atendimento']})")
+                    f_tuple = (f["id"], f["modelo_nome"], f["data_atendimento"], f["dados_respostas"])
+                    w_item.setData(Qt.UserRole, f_tuple)
+                    self.list_historico_fichas.addItem(w_item)
         except Exception as e:
             print(f"Erro ao buscar histórico de fichas no banco: {e}")
 
@@ -591,26 +568,35 @@ class PacientesScreen(QWidget):
         texto = self.input_busca.text().lower().strip()
         pasta_filtro = self.combo_filtro_pasta.currentText()
         
-        try:
-            conn = sqlite3.connect("consultorio.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, nome, telefone, convenio, pasta, cpf, rg FROM pacientes ORDER BY nome ASC")
-            todos = cursor.fetchall()
-            conn.close()
+        if not self.db.supabase:
+            return
             
+        try:
+            resposta = self.db.supabase.table("pacientes")\
+                .select("id, nome, telefone, convenio, pasta, cpf, rg")\
+                .eq("consultorio_id", self.db.consultorio_id)\
+                .order("nome", desc=False)\
+                .execute()
+            
+            todos = resposta.data or []
             filtrados = []
             for p in todos:
-                nome, fone, conv, pasta, cpf, rg = str(p[1]).lower(), str(p[2]).lower(), str(p[3]).lower(), str(p[4]), str(p[5]).lower(), str(p[6]).lower()
+                nome = str(p.get("nome") or "").lower()
+                fone = str(p.get("telefone") or "").lower()
+                conv = str(p.get("convenio") or "").lower()
+                pasta = str(p.get("pasta") or "")
+                cpf = str(p.get("cpf") or "").lower()
+                rg = str(p.get("rg") or "").lower()
                 
                 match_texto = not texto or (texto in nome or texto in fone or texto in conv or texto in cpf or texto in rg)
                 match_pasta = "Todas as Pastas" in pasta_filtro or pasta == pasta_filtro
                 
                 if match_texto and match_pasta:
-                    filtrados.append(p[:5])
+                    filtrados.append((p["id"], p.get("nome") or "", p.get("telefone") or "", p.get("convenio") or "", p.get("pasta") or ""))
                     
             self.carregar_pacientes_tabela(filtrados)
-        except:
-            pass
+        except Exception as e:
+            print(f"Erro ao filtrar pacientes: {e}")
 
     def filtrar_por_pasta_externo(self, nome_pasta):
         self.combo_filtro_pasta.setCurrentText(nome_pasta)
@@ -634,25 +620,35 @@ class PacientesScreen(QWidget):
             self.mostrar_alerta_seguro("warning", "Aviso", "O campo Nome Completo é obrigatório.")
             return
             
+        if not self.db.supabase:
+            return
+            
         try:
-            conn = sqlite3.connect("consultorio.db")
-            cursor = conn.cursor()
+            payload = {
+                "consultorio_id": self.db.consultorio_id,
+                "nome": nome,
+                "telefone": fone,
+                "nascimento": nasc,
+                "convenio": conv,
+                "pasta": pasta,
+                "sexo": sexo,
+                "cpf": cpf,
+                "rg": rg,
+                "estado_civil": civil,
+                "profissao": prof,
+                "endereco": end,
+                "queixa": queixa
+            }
             
             if self.id_em_edicao == -1:
-                cursor.execute("""
-                    INSERT INTO pacientes (nome, telefone, nascimento, convenio, pasta, sexo, cpf, rg, estado_civil, profissao, endereco, queixa) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (nome, fone, nasc, conv, pasta, sexo, cpf, rg, civil, prof, end, queixa))
+                self.db.supabase.table("pacientes").insert(payload).execute()
             else:
-                cursor.execute("""
-                    UPDATE pacientes SET nome=?, telefone=?, nascimento=?, convenio=?, pasta=?, 
-                                         sexo=?, cpf=?, rg=?, estado_civil=?, profissao=?, endereco=?, queixa=?
-                    WHERE id=?
-                """, (nome, fone, nasc, conv, pasta, sexo, cpf, rg, civil, prof, end, queixa, self.id_em_edicao))
+                self.db.supabase.table("pacientes")\
+                    .update(payload)\
+                    .eq("id", self.id_em_edicao)\
+                    .eq("consultorio_id", self.db.consultorio_id)\
+                    .execute()
                 
-            conn.commit()
-            conn.close()
-            
             self.limpar_formulario()
             self.carregar_pacientes_tabela()
             self.mostrar_alerta_seguro("success", "Sucesso", "Prontuário do paciente salvo com sucesso!")
@@ -679,13 +675,20 @@ class PacientesScreen(QWidget):
         """)
         
         if msg.exec() == QMessageBox.Yes:
+            if not self.db.supabase:
+                return
             try:
-                conn = sqlite3.connect("consultorio.db")
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM pacientes WHERE id = ?", (self.id_em_edicao,))
-                cursor.execute("DELETE FROM fichas_preenchidas WHERE paciente_id = ?", (self.id_em_edicao,))
-                conn.commit()
-                conn.close()
+                self.db.supabase.table("pacientes")\
+                    .delete()\
+                    .eq("id", self.id_em_edicao)\
+                    .eq("consultorio_id", self.db.consultorio_id)\
+                    .execute()
+                    
+                self.db.supabase.table("fichas_preenchidas")\
+                    .delete()\
+                    .eq("paciente_id", self.id_em_edicao)\
+                    .eq("consultorio_id", self.db.consultorio_id)\
+                    .execute()
                 
                 self.limpar_formulario()
                 self.carregar_pacientes_tabela()

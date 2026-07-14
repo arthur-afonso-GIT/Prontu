@@ -1,16 +1,25 @@
 import sys
 from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QPalette, QColor
 from ui.main_window import MainWindow
-from ui.screens.configuracoes import ConfiguracoesScreen
+
 def main():
-    # Inicializa o gerenciador de aplicação do PySide6
     app = QApplication(sys.argv)
     
-    # Cria e exibe a janela principal do sistema
+    # Força estilo Fusion + paleta clara, para não herdar o modo escuro do Windows
+    app.setStyle("Fusion")
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor("#f8fafc"))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor("#0f172a"))
+    palette.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.Text, QColor("#0f172a"))
+    palette.setColor(QPalette.ColorRole.Button, QColor("#f1f5f9"))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#0f172a"))
+    app.setPalette(palette)
+    
     window = MainWindow()
     window.show()
     
-    # Executa o loop principal do sistema
     sys.exit(app.exec())
 
 if __name__ == "__main__":

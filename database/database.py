@@ -1,111 +1,110 @@
-import sqlite3
-import os
+import sys
+from supabase import create_client, Client
+from config_app import SUPABASE_URL, SUPABASE_KEY, CONSULTORIO_ID
 
 class Database:
-    def __init__(self, db_name=None):
-        """Inicialização segura comercial na pasta AppData do usuário."""
-        if db_name is None:
-            appdata = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
-            pasta_app = os.path.join(appdata, "ProntuApp")
-            if not os.path.exists(pasta_app):
-                os.makedirs(pasta_app)
-            self.db_name = os.path.join(pasta_app, "prontu.db")
-        else:
-            self.db_name = db_name
-            
-        self.init_db()
+    def __init__(self):
+        """Inicializa a conexão segura com o Supabase na Nuvem."""
+        try:
+            self.supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        except Exception as e:
+            print(f"Erro ao conectar ao Supabase: {e}")
+            self.supabase = None
+        
+        # Define explicitamente o consultorio_id logo na inicialização
+        self.consultorio_id = CONSULTORIO_ID
 
-    def conectar(self):
-        """Abre a conexão com o banco de dados local."""
-        return sqlite3.connect(self.db_name)
-
-    def init_db(self):
-        """Cria as tabelas iniciais se elas não existirem no computador."""
-        conn = self.conectar()
-        cursor = conn.cursor()
-        
-        # 1. Tabela de Pacientes
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS pacientes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nome TEXT NOT NULL,
-                telefone TEXT,
-                nascimento TEXT,
-                convenio TEXT,
-                endereco TEXT,
-                queixa_principal TEXT,
-                pasta TEXT DEFAULT 'Geral'
-            )
-        """)
-        
-        # 2. Tabela de Agendamentos estruturada para persistência em JSON
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS agendamentos (
-                data TEXT,
-                hora TEXT,
-                dados TEXT,
-                PRIMARY KEY (data, hora)
-            )
-        """)
-        
-        # 3. Tabela de Configurações do Sistema
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS configuracoes (
-                chave TEXT PRIMARY KEY,
-                valor TEXT
-            )
-        """)
-        
-        conn.commit()
-        conn.close()
-
-    # --- FUNÇÕES DE CONFIGURAÇÃO (Sincronizadas em Português) ---
+    # --- FUNÇÕES DE CONFIGURAÇÃO ---
     def obter_nome_profissional(self):
-        """Recupera o nome salvo do médico/profissional."""
-        conn = self.conectar()
-        cursor = conn.cursor()
-        cursor.execute("SELECT valor FROM configuracoes WHERE chave = 'nome_profissional'")
-        row = cursor.fetchone()
-        conn.close()
-        return row[0] if row else ""
+        """Recupera o nome salvo do médico/profissional para esta clínica."""
+        if not self.supabase:
+            return ""
+        try:
+            resposta = self.supabase.table("configuracoes")\
+                .select("valor")\
+                .eq("consultorio_id", self.consultorio_id)\
+                .eq("chave", "nome_profissional")\
+                .execute()
+            
+            if resposta.data:
+                return resposta.data[0]["valor"]
+        except Exception as e:
+            print(f"Erro ao obter nome profissional: {e}")
+        return ""
 
     def salvar_nome_profissional(self, nome):
-        """Salva ou atualiza o nome do médico/profissional."""
-        conn = self.conectar()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT OR REPLACE INTO configuracoes (chave, valor)
-            VALUES ('nome_profissional', ?)
-        """, (nome.strip(),))
-        conn.commit()
-        conn.close()
+        """Salva ou atualiza o nome do médico/profissional na nuvem."""
+        if not self.supabase:
+            return
+        try:
+            payload = {
+                "consultorio_id": self.consultorio_id,
+                "chave": "nome_profissional",
+                "valor": nome.strip()
+            }
+            # Tenta atualizar ou inserir dependendo da existência prévia
+            self.supabase.table("configuracoes").upsert(payload).execute()
+        except Exception as e:
+            print(f"Erro ao salvar nome profissional: {e}")
 
     # --- FUNÇÕES PARA PACIENTES ---
     def salvar_paciente(self, dados):
-        """Insere um novo paciente no banco de dados."""
-        conn = self.conectar()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO pacientes (nome, telefone, nascimento, convenio, endereco, queixa_principal, pasta)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (dados['nome'], dados['telefone'], dados['nascimento'], dados['convenio'], dados['endereco'], dados['queixa_principal'], dados['pasta']))
-        conn.commit()
-        conn.close()
+        """Insere ou atualiza um paciente na base de dados do Supabase."""
+        if not self.supabase:
+            return
+        try:
+            payload = {
+                "consultorio_id": self.consultorio_id,
+                "nome": dados.get('nome'),
+                "telefone": dados.get('telefone'),
+                "nascimento": dados.get('nascimento'),
+                "convenio": dados.get('convenio'),
+                "endereco": dados.get('endereco'),
+                "queixa_principal": dados.get('queixa_principal'),
+                "pasta": dados.get('pasta', 'Geral')
+            }
+            self.supabase.table("pacientes").insert(payload).execute()
+        except Exception as e:
+            print(f"Erro ao salvar paciente: {e}")
 
     def listar_todos_pacientes(self):
-        """Retorna todos os pacientes cadastrados."""
-        conn = self.conectar()
-        cursor = conn.cursor()
-        cursor.execute("SELECT nome, telefone, convenio, pasta, nascimento, endereco, queixa_principal FROM pacientes ORDER BY nome ASC")
-        pacientes = cursor.fetchall()
-        conn.close()
-        return pacientes
+        """Retorna todos os pacientes cadastrados na nuvem."""
+        if not self.supabase:
+            return []
+        try:
+            resposta = self.supabase.table("pacientes")\
+                .select("nome, telefone, convenio, pasta, nascimento, endereco, queixa_principal")\
+                .eq("consultorio_id", self.consultorio_id)\
+                .order("nome")\
+                .execute()
+            
+            pacientes = []
+            for item in resposta.data:
+                pacientes.append((
+                    item["nome"],
+                    item["telefone"],
+                    item["convenio"],
+                    item["pasta"],
+                    item["nascimento"],
+                    item["endereco"],
+                    item["queixa_principal"]
+                ))
+            return pacientes
+        except Exception as e:
+            print(f"Erro ao listar pacientes: {e}")
+            return []
 
     def buscar_nomes_pacientes(self):
-        """Retorna apenas a lista de strings com os nomes (Perfeito para a Agenda!)."""
-        conn = self.conectar()
-        cursor = conn.cursor()
-        cursor.execute("SELECT nome FROM pacientes ORDER BY nome ASC")
-        nomes = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        return nomes
+        """Retorna apenas a lista de strings com os nomes (Para a Agenda!)."""
+        if not self.supabase:
+            return []
+        try:
+            resposta = self.supabase.table("pacientes")\
+                .select("nome")\
+                .eq("consultorio_id", self.consultorio_id)\
+                .order("nome")\
+                .execute()
+            return [row["nome"] for row in resposta.data]
+        except Exception as e:
+            print(f"Erro ao buscar nomes: {e}")
+            return []

@@ -1,4 +1,3 @@
-import sqlite3
 import os
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QFrame, QTableWidget, QHeaderView, QPushButton, 
@@ -13,7 +12,7 @@ class HomeScreen(QWidget):
         self.window_principal = window_principal
         self.on_novo_paciente_click = on_novo_paciente_click
         self.on_pasta_click = on_pasta_click
-        self.db = Database()  # Gerenciador de banco seguro
+        self.db = Database()  # Gerenciador unificado Supabase
         
         # Layout Principal
         main_layout = QVBoxLayout(self)
@@ -26,7 +25,6 @@ class HomeScreen(QWidget):
         
         hoje_extenso = QDate.currentDate().toString("dd 'de' MMMM 'de' yyyy")
         
-        # Labels como atributos de classe (self.) para permitir atualização em tempo real
         self.title = QLabel("Olá,")
         self.title.setStyleSheet("font-size: 24px; font-weight: bold; color: #0f172a;")
         
@@ -48,7 +46,7 @@ class HomeScreen(QWidget):
         
         main_layout.addLayout(header_layout)
         
-        # --- 2. CARDS DE INDICADORES (Métricas REAIS) ---
+        # --- 2. CARDS DE INDICADORES ---
         metricas_layout = QHBoxLayout()
         metricas_layout.setSpacing(20)
         
@@ -139,11 +137,9 @@ class HomeScreen(QWidget):
         main_layout.addLayout(split_tables_layout)
         main_layout.addStretch()
         
-        # Inicializa a saudação correta do banco
         self.atualizar_saudacao_dinamica()
 
     def atualizar_saudacao_dinamica(self):
-        """Busca o nome configurado na tabela e renderiza de forma elegante."""
         nome_medico = self.db.obter_nome_profissional()
         hoje_extenso = QDate.currentDate().toString("dd 'de' MMMM 'de' yyyy")
         
@@ -163,10 +159,10 @@ class HomeScreen(QWidget):
         lista_pastas = getattr(self.window_principal, 'pastas_sistema', ["Geral"])
         
         for nome_pasta in lista_pastas:
-            qtd_pacientes = self.contar_pacientes_na_pasta_sqlite(nome_pasta)
+            qtd_pacientes = self.contar_pacientes_na_pasta_supabase(nome_pasta)
             
             card = CardPasta(
-                nome=nome_pasta, 
+                nome=nome_pasta,
                 quantidade=qtd_pacientes,
                 on_clique=self.on_pasta_click,
                 on_editar=self.acao_editar_pasta,
@@ -176,56 +172,87 @@ class HomeScreen(QWidget):
             
         self.carregar_dados_iniciais()
 
-    def contar_pacientes_na_pasta_sqlite(self, nome_pasta):
+    def contar_pacientes_na_pasta_supabase(self, nome_pasta):
+        if not self.db.supabase:
+            return 0
         try:
-            conn = self.db.conectar()
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM pacientes WHERE UPPER(pasta) = ?", (nome_pasta.strip().upper(),))
-            total = cursor.fetchone()[0]
-            conn.close()
-            return total
-        except:
+            resposta = self.db.supabase.table("pacientes")\
+                .select("id", count="exact")\
+                .eq("consultorio_id", self.db.consultorio_id)\
+                .ilike("pasta", nome_pasta.strip())\
+                .execute()
+            return resposta.count if resposta.count is not None else 0
+        except Exception as e:
+            print(f"Erro ao contar pacientes da pasta: {e}")
             return 0
 
     def carregar_dados_iniciais(self):
+        if not self.db.supabase:
+            return
         try:
             self.table_recentes.setRowCount(0)
-            conn = self.db.conectar()
-            cursor = conn.cursor()
             
-            # Atualiza o Card Dinâmico de total de pacientes
-            cursor.execute("SELECT COUNT(*) FROM pacientes")
-            total_p = cursor.fetchone()[0]
+            # 1. Total de Pacientes e preenchimento dos Recentes
+            resposta_pacientes = self.db.supabase.table("pacientes")\
+                .select("nome, pasta")\
+                .eq("consultorio_id", self.db.consultorio_id)\
+                .order("id", desc=True)\
+                .execute()
+                
+            total_p = len(resposta_pacientes.data) if resposta_pacientes.data else 0
             self.card_pacientes.set_valor(str(total_p))
             
-            # Pacientes recentes adicionados
-            cursor.execute("SELECT nome, pasta FROM pacientes ORDER BY id DESC LIMIT 4")
-            rows_pacientes = cursor.fetchall()
-            
-            for row_idx, data in enumerate(rows_pacientes):
+            # Exibe os últimos 4 adicionados
+            ultimos_pacientes = resposta_pacientes.data[:4] if resposta_pacientes.data else []
+            for row_idx, item in enumerate(ultimos_pacientes):
                 self.table_recentes.insertRow(row_idx)
-                self.table_recentes.setItem(row_idx, 0, QTableWidgetItem(str(data[0]).upper()))
-                self.table_recentes.setItem(row_idx, 1, QTableWidgetItem(str(data[1]).upper()))
+                self.table_recentes.setItem(row_idx, 0, QTableWidgetItem(str(item["nome"]).upper()))
+                self.table_recentes.setItem(row_idx, 1, QTableWidgetItem(str(item["pasta"]).upper()))
                 
+            # 2. Consultas da agenda para Hoje
             self.table_agenda_resumo.setRowCount(0)
-            hoje_iso = QDate.currentDate().toString("yyyy-MM-dd")
+            hoje_iso = QDate.currentDate().toString("dd/MM/yyyy")
             
-            # Consultas de hoje vindas da tabela agendamentos
-            cursor.execute("SELECT horario, paciente_nome, status FROM agendamentos WHERE data = ? ORDER BY horario ASC", (hoje_iso,))
-            rows_agenda = cursor.fetchall()
+            resposta_agenda = self.db.supabase.table("agenda")\
+                .select("horario, paciente, status")\
+                .eq("consultorio_id", self.db.consultorio_id)\
+                .eq("data", hoje_iso)\
+                .execute()
             
-            # Atualiza o Card Dinâmico de consultas do dia
-            self.card_consultas.set_valor(str(len(rows_agenda)))
+            eventos_hoje = []
+            if resposta_agenda.data:
+                eventos_hoje = sorted(resposta_agenda.data, key=lambda x: x["horario"])
             
-            conn.close()
+            self.card_consultas.set_valor(str(len(eventos_hoje)))
             
-            for r_idx, (hora, pac, status) in enumerate(rows_agenda):
+            for r_idx, item in enumerate(eventos_hoje):
                 self.table_agenda_resumo.insertRow(r_idx)
-                self.table_agenda_resumo.setItem(r_idx, 0, QTableWidgetItem(str(hora)))
-                self.table_agenda_resumo.setItem(r_idx, 1, QTableWidgetItem(str(pac).upper()))
-                self.table_agenda_resumo.setItem(r_idx, 2, QTableWidgetItem(str(status if status else "Agendado")))
+                self.table_agenda_resumo.setItem(r_idx, 0, QTableWidgetItem(str(item["horario"])))
+                self.table_agenda_resumo.setItem(r_idx, 1, QTableWidgetItem(str(item["paciente"]).upper()))
+                self.table_agenda_resumo.setItem(r_idx, 2, QTableWidgetItem(str(item["status"] if item["status"] else "Agendado")))
         except Exception as e:
             print(f"Erro ao inicializar tabelas reais da home: {e}")
+
+    def mostrar_alerta_seguro(self, tipo, titulo, texto):
+        """Exibe um QMessageBox com cores explícitas, evitando herdar o tema
+        escuro do sistema operacional (o que deixava texto ilegível)."""
+        msg = QMessageBox(self)
+        msg.setWindowTitle(titulo)
+        msg.setText(texto)
+        if tipo == "warning":
+            msg.setIcon(QMessageBox.Icon.Warning)
+        elif tipo == "error":
+            msg.setIcon(QMessageBox.Icon.Critical)
+        else:
+            msg.setIcon(QMessageBox.Icon.Information)
+
+        msg.setStyleSheet("""
+            QMessageBox { background-color: #ffffff; }
+            QLabel { color: #0f172a; font-size: 13px; font-weight: normal; }
+            QPushButton { background-color: #0284c7; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold; }
+            QPushButton:hover { background-color: #0369a1; }
+        """)
+        msg.exec()
 
     def acao_criar_nova_pasta(self):
         dialog = QInputDialog(self)
@@ -247,7 +274,7 @@ class HomeScreen(QWidget):
             lista = list(getattr(self.window_principal, 'pastas_sistema', ["Geral"]))
             
             if nome_limpo in lista:
-                QMessageBox.warning(self, "Aviso", "Esta pasta já existe no sistema.")
+                self.mostrar_alerta_seguro("warning", "Aviso", "Esta pasta já existe no sistema.")
                 return
                 
             lista.append(nome_limpo)
@@ -256,7 +283,7 @@ class HomeScreen(QWidget):
 
     def acao_editar_pasta(self, nome_antigo):
         if nome_antigo.lower() == "geral":
-            QMessageBox.warning(self, "Aviso", "A pasta padrão 'Geral' não pode ser renomeada.")
+            self.mostrar_alerta_seguro("warning", "Aviso", "A pasta padrão 'Geral' não pode ser renomeada.")
             return
 
         dialog = QInputDialog(self)
@@ -279,47 +306,58 @@ class HomeScreen(QWidget):
             lista = list(getattr(self.window_principal, 'pastas_sistema', ["Geral"]))
             
             if nome_limpo in lista and nome_limpo != nome_antigo:
-                QMessageBox.warning(self, "Aviso", "Já existe outra pasta com esse nome.")
+                self.mostrar_alerta_seguro("warning", "Aviso", "Já existe outra pasta com esse nome.")
                 return
                 
             if nome_antigo in lista:
                 idx = lista.index(nome_antigo)
                 lista[idx] = nome_limpo
             
-            self.atualizar_pasta_dos_pacientes_sqlite(nome_antigo, nome_limpo)
+            self.atualizar_pasta_dos_pacientes_supabase(nome_antigo, nome_limpo)
             self.window_principal.sincronizar_pastas_sistema(lista)
             self.renderizar_lista_pastas()
 
     def acao_excluir_pasta(self, nome_pasta):
         if nome_pasta.lower() == "geral":
-            QMessageBox.warning(self, "Aviso", "A pasta padrão 'Geral' não pode ser apagada.")
+            self.mostrar_alerta_seguro("warning", "Aviso", "A pasta padrão 'Geral' não pode ser apagada.")
             return
 
-        resposta = QMessageBox.question(
-            self, "Confirmar Exclusão",
-            f"Tem certeza que deseja apagar a pasta '{nome_pasta}'?\nOs pacientes vinculados voltarão para o grupo 'Geral'.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Confirmar Exclusão")
+        msg.setText(f"Tem certeza que deseja apagar a pasta '{nome_pasta}'?\nOs pacientes vinculados voltarão para o grupo 'Geral'.")
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+        msg.setStyleSheet("""
+            QMessageBox { background-color: #ffffff; }
+            QLabel { color: #0f172a; font-size: 13px; font-weight: normal; }
+            QPushButton { background-color: #0284c7; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold; }
+            QPushButton:hover { background-color: #0369a1; }
+        """)
+        resposta = msg.exec()
         
         if resposta == QMessageBox.StandardButton.Yes:
             lista = list(getattr(self.window_principal, 'pastas_sistema', ["Geral"]))
             if nome_pasta in lista:
                 lista.remove(nome_pasta)
                 
-                self.atualizar_pasta_dos_pacientes_sqlite(nome_pasta, "Geral")
+                self.atualizar_pasta_dos_pacientes_supabase(nome_pasta, "Geral")
                 self.window_principal.sincronizar_pastas_sistema(lista)
                 self.renderizar_lista_pastas()
 
-    def atualizar_pasta_dos_pacientes_sqlite(self, de_pasta, para_pasta):
+    def atualizar_pasta_dos_pacientes_supabase(self, de_pasta, para_pasta):
+        if not self.db.supabase:
+            return
         try:
-            conn = self.db.conectar()
-            cursor = conn.cursor()
-            cursor.execute("UPDATE pacientes SET pasta = ? WHERE pasta = ?", (para_pasta, de_pasta))
-            conn.commit()
-            conn.close()
+            self.db.supabase.table("pacientes")\
+                .update({"pasta": para_pasta})\
+                .eq("consultorio_id", self.db.consultorio_id)\
+                .eq("pasta", de_pasta)\
+                .execute()
+                
             if hasattr(self.window_principal, 'screen_pacientes'):
-                self.window_principal.screen_pacientes.carregar_dados_sqlite()
+                if hasattr(self.window_principal.screen_pacientes, 'carregar_pacientes_tabela'):
+                    self.window_principal.screen_pacientes.carregar_pacientes_tabela()
         except Exception as e:
             print(f"Erro ao atualizar dados: {e}")
 
