@@ -131,6 +131,7 @@ class MainWindow(QMainWindow):
         self.screen_agenda = AgendaScreen(self.db)
         self.screen_fichas = FichasScreen(self.db) if FichasScreen is not None else QWidget()
         self.screen_pacientes.window_principal = self
+        self.screen_agenda.window_principal = self
         if hasattr(self.screen_fichas, "__dict__"):
             self.screen_fichas.window_principal = self
         # ConfiguracoesScreen também precisa da JANELA PRINCIPAL (self), não do banco,
@@ -227,6 +228,15 @@ class MainWindow(QMainWindow):
             0,
             lambda: self.screen_fichas.abrir_ficha_para_edicao(ficha_id)
             if hasattr(self.screen_fichas, "abrir_ficha_para_edicao") else None,
+        )
+
+    def abrir_nova_ficha_para_paciente(self, paciente_id):
+        """Abre uma nova ficha já vinculada ao paciente atendido na agenda."""
+        self.mudar_tela(3, self.btn_fichas, atualizar=False)
+        QTimer.singleShot(
+            0,
+            lambda: self.screen_fichas.iniciar_nova_ficha_para_paciente(paciente_id)
+            if hasattr(self.screen_fichas, "iniciar_nova_ficha_para_paciente") else None,
         )
 
     def abrir_paciente_especifico(self, paciente_id):

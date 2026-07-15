@@ -6,6 +6,10 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PySide6.QtCore import Qt, QDate, QTime, QDateTime, QPoint
 
 class AgendaScreen(QWidget):
+    STATUS_CONSULTA = [
+        "🕒 Agendado", "✅ Confirmado", "🏥 Em Atendimento",
+        "✅ Realizada", "🚫 Cancelada", "❌ Faltou",
+    ]
     HORARIOS_GRADE = [
         "07:00", "07:30", "08:00", "08:30", "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
         "12:00", "12:30", "13:00", "13:30", "14:00", "14:30", "15:00", "15:30", "16:00", "16:30",
@@ -159,6 +163,8 @@ class AgendaScreen(QWidget):
         form_layout.addWidget(QLabel("Status Inicial:"))
         self.input_status = QComboBox()
         self.input_status.addItems(["🕒 Agendado", "✅ Confirmado", "🏥 Em Atendimento", "❌ Faltou"])
+        self.input_status.clear()
+        self.input_status.addItems(self.STATUS_CONSULTA)
         form_layout.addWidget(self.input_status)
         
         form_layout.addWidget(QLabel("Observações (Opcional):"))
@@ -225,7 +231,10 @@ class AgendaScreen(QWidget):
                         "procedimento": row["procedimento"],
                         "duracao_txt": row["duracao_txt"],
                         "observacao": row["observacao"],
-                        "slots_vinculados": json.loads(row["slots_vinculados"]) if row["slots_vinculados"] else []
+                        "slots_vinculados": (
+                            row["slots_vinculados"] if isinstance(row["slots_vinculados"], list)
+                            else json.loads(row["slots_vinculados"]) if row["slots_vinculados"] else []
+                        )
                     }
         except Exception as e:
             print(f"Erro ao carregar agendamentos do Supabase: {e}")
@@ -233,10 +242,10 @@ class AgendaScreen(QWidget):
     def salvar_agendamento_no_db(self, data, hora, dados_dict):
         """Grava ou atualiza de maneira atômica o agendamento na nuvem."""
         if not self.db_gerenciador.supabase:
-            return
+            return False
         try:
             payload = {
-                "consultorio_id": self.db_gerenciador.consultorio_id,
+                "consultorio_id": int(self.db_gerenciador.consultorio_id),
                 "data": data,
                 "horario": hora,
                 "paciente": dados_dict.get("paciente", ""),
@@ -247,12 +256,21 @@ class AgendaScreen(QWidget):
                 "tipo_bloco": dados_dict.get("tipo_bloco", ""),
                 "slots_vinculados": json.dumps(dados_dict.get("slots_vinculados", []))
             }
-            self.db_gerenciador.supabase.table("agenda").upsert(
-                payload, 
-                on_conflict="consultorio_id,data,horario"
-            ).execute()
+            tabela_agenda = self.db_gerenciador.supabase.table("agenda")
+            existente = tabela_agenda.select("horario").eq(
+                "consultorio_id", payload["consultorio_id"]
+            ).eq("data", data).eq("horario", hora).execute()
+            if existente.data:
+                tabela_agenda.update(payload).eq(
+                    "consultorio_id", payload["consultorio_id"]
+                ).eq("data", data).eq("horario", hora).execute()
+            else:
+                tabela_agenda.insert(payload).execute()
+            return True
         except Exception as e:
             print(f"Erro ao salvar agendamento no Supabase: {e}")
+            self._ultimo_erro_agenda = str(e)
+            return False
 
     def remover_agendamento_do_db(self, data, hora):
         """Apaga o slot da nuvem de forma imediata."""
@@ -371,9 +389,9 @@ class AgendaScreen(QWidget):
                 if dados["tipo_bloco"] == "principal":
                     status_txt = dados["status"]
                     cor_borda = "#0284c7"
-                    if "Confirmado" in status_txt: cor_borda = "#10b981"
+                    if "Confirmado" in status_txt or "Realizada" in status_txt: cor_borda = "#10b981"
                     elif "Atendimento" in status_txt: cor_borda = "#f59e0b"
-                    elif "Faltou" in status_txt: cor_borda = "#ef4444"
+                    elif "Faltou" in status_txt or "Cancelada" in status_txt: cor_borda = "#ef4444"
                     
                     card_info = QFrame()
                     card_info.setStyleSheet(f"QFrame {{ background-color: white; border: 1px solid #e2e8f0; border-left: 5px solid {cor_borda}; border-radius: 6px; }}")
@@ -391,14 +409,43 @@ class AgendaScreen(QWidget):
                         texto_sub += f"  •  📝 {dados['observacao']}"
                         
                     lbl_sub = QLabel(texto_sub)
+                    lbl_sub.setWordWrap(True)
+                    lbl_sub.setMinimumWidth(0)
                     lbl_sub.setStyleSheet("font-size: 12px; color: #64748b; border: none;")
                     
                     vbox_detalhes.addWidget(lbl_paciente)
                     vbox_detalhes.addWidget(lbl_sub)
-                    card_info_layout.addLayout(vbox_detalhes)
-                    card_info_layout.addStretch()
+                    card_info_layout.addLayout(vbox_detalhes, stretch=1)
                     
                     btn_remover = QPushButton("✕")
+                    combo_status = QComboBox()
+                    combo_status.addItems(self.STATUS_CONSULTA)
+                    indice_status = combo_status.findText(status_txt)
+                    if indice_status < 0:
+                        combo_status.addItem(status_txt)
+                        indice_status = combo_status.count() - 1
+                    combo_status.setCurrentIndex(indice_status)
+                    combo_status.setMaximumWidth(105)
+                    combo_status.setStyleSheet(
+                        "QComboBox { background: #f8fafc; color: #334155; border: 1px solid #cbd5e1; "
+                        "border-radius: 5px; padding: 5px; font-size: 11px; min-width: 115px; }"
+                    )
+                    combo_status.currentTextChanged.connect(
+                        lambda novo_status, h=hora: self.atualizar_status_agendamento(h, novo_status)
+                    )
+                    card_info_layout.addWidget(combo_status)
+
+                    if "Realizada" in status_txt:
+                        btn_ficha = QPushButton("Abrir ficha")
+                        btn_ficha.setStyleSheet(
+                            "QPushButton { background: #0284c7; color: white; border: none; border-radius: 5px; "
+                            "padding: 6px 9px; font-weight: bold; font-size: 11px; } "
+                            "QPushButton:hover { background: #0369a1; }"
+                        )
+                        btn_ficha.clicked.connect(lambda checked=False, h=hora: self.abrir_ficha_da_consulta(h))
+                        btn_ficha.setMaximumWidth(78)
+                        card_info_layout.addWidget(btn_ficha)
+
                     btn_remover.setFixedSize(24, 24)
                     btn_remover.setStyleSheet("QPushButton { background: transparent; color: #94a3b8; border: none; font-weight: bold; font-size: 14px; } QPushButton:hover { color: #ef4444; }")
                     btn_remover.clicked.connect(lambda checked=False, h=hora: self.remover_agendamento(h))
@@ -518,7 +565,17 @@ class AgendaScreen(QWidget):
         }
         
         self.db_agendamentos[str_data][hora_inicial_str] = bloco_principal
-        self.salvar_agendamento_no_db(str_data, hora_inicial_str, bloco_principal)
+        if not self.salvar_agendamento_no_db(str_data, hora_inicial_str, bloco_principal):
+            del self.db_agendamentos[str_data][hora_inicial_str]
+            self.input_paciente.blockSignals(False)
+            detalhe = getattr(self, "_ultimo_erro_agenda", "Motivo não informado pelo Supabase.")
+            QMessageBox.critical(
+                self,
+                "Consulta não salva",
+                "Não foi possível salvar a consulta no Supabase. Ela não será mantida apenas na memória.\n\n"
+                f"Detalhe para correção: {detalhe}",
+            )
+            return
         
         for slot_sequencia in horarios_a_reservar[1:]:
             bloco_continua = {
@@ -544,6 +601,40 @@ class AgendaScreen(QWidget):
             self.input_hora.setCurrentText(proximo_slot)
         
         self.renderizar_timeline_calendario()
+
+    def atualizar_status_agendamento(self, hora, novo_status):
+        """Atualiza o status sem alterar o horário ou os dados da consulta."""
+        str_data = self.data_visualizada.toString("dd/MM/yyyy")
+        dados = self.db_agendamentos.get(str_data, {}).get(hora)
+        if not dados or dados.get("tipo_bloco") != "principal":
+            return
+        if dados.get("status") == novo_status:
+            return
+        dados["status"] = novo_status
+        self.salvar_agendamento_no_db(str_data, hora, dados)
+        self.renderizar_timeline_calendario()
+
+    def abrir_ficha_da_consulta(self, hora):
+        """Localiza o paciente da consulta realizada e abre uma nova ficha."""
+        str_data = self.data_visualizada.toString("dd/MM/yyyy")
+        dados = self.db_agendamentos.get(str_data, {}).get(hora)
+        if not dados or "Realizada" not in dados.get("status", ""):
+            return
+        if not self.db_gerenciador.supabase:
+            return
+        try:
+            resposta = self.db_gerenciador.supabase.table("pacientes").select("id").eq(
+                "consultorio_id", self.db_gerenciador.consultorio_id
+            ).ilike("nome", dados["paciente"]).is_("deleted_at", "null").execute()
+            if not resposta.data:
+                QMessageBox.warning(self, "Paciente não encontrado", "Não foi possível localizar o paciente desta consulta.")
+                return
+            janela = getattr(self, "window_principal", None)
+            if janela and hasattr(janela, "abrir_nova_ficha_para_paciente"):
+                janela.abrir_nova_ficha_para_paciente(resposta.data[0]["id"])
+        except Exception as e:
+            print(f"Erro ao abrir ficha pela agenda: {e}")
+            QMessageBox.warning(self, "Não foi possível abrir", "Não foi possível abrir a ficha deste paciente agora.")
 
     def remover_agendamento(self, hora):
         str_data = self.data_visualizada.toString("dd/MM/yyyy")

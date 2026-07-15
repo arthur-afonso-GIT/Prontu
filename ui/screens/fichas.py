@@ -1113,6 +1113,18 @@ class FichasScreen(QWidget):
 
         return lista_metadados
 
+    def iniciar_nova_ficha_para_paciente(self, paciente_id):
+        """Prepara uma nova ficha para o paciente vindo da Agenda."""
+        self.cancelar_edicao_ficha()
+        self.carregar_pacientes_combo()
+        indice = self.combo_paciente.findData(paciente_id)
+        if indice >= 0:
+            self.combo_paciente.setCurrentIndex(indice)
+            self.lbl_status_operacao.setText("Nova ficha preparada para o paciente da consulta.")
+            return True
+        self.exibir_popup("erro", "Paciente não encontrado", "Não foi possível localizar o paciente da consulta.")
+        return False
+
     def abrir_ficha_para_edicao(self, ficha_id):
         """Abre uma ficha existente no formulário original, já preenchida."""
         if not self.db.supabase:
