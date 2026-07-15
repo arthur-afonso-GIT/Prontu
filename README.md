@@ -44,11 +44,12 @@ The product is built as a desktop-first experience and is intended to be deliver
 
 ### Appointment scheduling
 
-![Prontu appointment scheduling](![alt text](image.png))
+![Prontu appointment scheduling]<img width="1918" height="1020" alt="image" src="https://github.com/user-attachments/assets/e9951bf5-8c77-475c-bc39-9b9017938b77" />
+
 
 ### Financial tracking
 
-![Prontu financial tracking](docs/screenshots/finance-dashboard.png)
+<img width="1918" height="1013" alt="image" src="https://github.com/user-attachments/assets/8ff3b37a-c406-44f5-b09a-20dcd560de96" />
 
 ## Technology stack
 
