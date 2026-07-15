@@ -4,7 +4,6 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QMessageBox, QCalendarWidget, QScrollArea,
                                QHeaderView, QTableView)
 from PySide6.QtCore import Qt, QDate, QTime, QDateTime, QPoint
-from database import Database
 
 class AgendaScreen(QWidget):
     HORARIOS_GRADE = [
@@ -13,19 +12,13 @@ class AgendaScreen(QWidget):
         "17:00", "17:30", "18:00", "18:30", "19:00"
     ]
 
-    def __init__(self):
+    def __init__(self, database_instancia):
         super().__init__()
         
         self.setStyleSheet("color: #0f172a;")
-        self.db_gerenciador = Database()
         
-        # Garante que o consultorio_id esteja sempre disponível nesta instância
-        if not hasattr(self.db_gerenciador, 'consultorio_id') or not self.db_gerenciador.consultorio_id:
-            try:
-                from config_app import CONSULTORIO_ID
-                self.db_gerenciador.consultorio_id = CONSULTORIO_ID
-            except ImportError:
-                self.db_gerenciador.consultorio_id = 1
+        # Recebe a conexão única já configurada e autenticada a partir da MainWindow
+        self.db_gerenciador = database_instancia
         
         self.data_visualizada = QDate.currentDate()
         self.lista_pacientes_disponiveis = []
@@ -130,6 +123,11 @@ class AgendaScreen(QWidget):
         self.input_paciente = QComboBox()
         self.input_paciente.setEditable(True)
         self.input_paciente.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        # Remove o autocompletar embutido do Qt: ele fazia inline-completion
+        # (sugeria e já deixava o restante do nome selecionado), o que
+        # atrapalhava continuar digitando ou apagar com backspace. A gente
+        # já filtra e mostra sugestões manualmente em filtrar_pacientes_ao_digitar.
+        self.input_paciente.setCompleter(None)
         self.input_paciente.setPlaceholderText("Selecione ou digite para buscar...")
         self.input_paciente.lineEdit().textEdited.connect(self.filtrar_pacientes_ao_digitar)
         form_layout.addWidget(self.input_paciente)
@@ -248,7 +246,6 @@ class AgendaScreen(QWidget):
                 "tipo_bloco": dados_dict.get("tipo_bloco", ""),
                 "slots_vinculados": json.dumps(dados_dict.get("slots_vinculados", []))
             }
-            # Upsert estruturado por consultório, data e horário
             self.db_gerenciador.supabase.table("agenda").upsert(
                 payload, 
                 on_conflict="consultorio_id,data,horario"

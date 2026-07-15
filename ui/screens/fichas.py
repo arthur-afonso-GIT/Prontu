@@ -1,10 +1,14 @@
 import os
 import json
+import uuid
+import mimetypes
 from datetime import datetime
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QComboBox, QScrollArea, 
-                               QFrame, QCheckBox, QTextEdit, QFileDialog, QMessageBox, QListView, QDialog)
-from PySide6.QtCore import Qt
+                               QFrame, QCheckBox, QTextEdit, QFileDialog, QMessageBox, QListView, QDialog,
+                               QDateEdit, QRadioButton, QButtonGroup)
+from PySide6.QtGui import QPixmap, QDesktopServices, QColor, QDoubleValidator
+from PySide6.QtCore import Qt, QUrl, QDate
 from database import Database  # Importa o gerenciador de banco de dados unificado
 
 try:
@@ -13,6 +17,17 @@ try:
 except ImportError:
     Document = None
     DOCX_DISPONIVEL = False
+
+try:
+    from pypdf import PdfReader
+    PDF_DISPONIVEL = True
+except ImportError:
+    PdfReader = None
+    PDF_DISPONIVEL = False
+
+# Extensões aceitas para anexo em uma ficha preenchida
+EXTENSOES_ANEXO_ACEITAS = "Arquivos Suportados (*.jpg *.jpeg *.png *.webp *.pdf)"
+NOME_BUCKET_ANEXOS = "fichas-anexos"
 
 
 class CustomInputDialog(QDialog):
@@ -73,6 +88,7 @@ class FichasScreen(QWidget):
         self.modelo_atual_campos = [] 
         self.widgets_dinamicos = {}   
         self.modo_criacao = False 
+        self.arquivos_anexados = []  # Lista de caminhos locais pendentes de upload (limpa após salvar)
         
         self.main_layout = QHBoxLayout(self)
         self.main_layout.setContentsMargins(20, 20, 20, 20)
@@ -122,13 +138,26 @@ class FichasScreen(QWidget):
         self.combo_modelo.view().setStyleSheet("QListView { background-color: #ffffff !important; color: #0f172a !important; selection-background-color: #0284c7; }")
         self.left_layout.addWidget(self.combo_modelo)
         
-        self.btn_importar = QPushButton("📥 Importar Ficha (.docx)")
+        botoes_importar_layout = QHBoxLayout()
+        botoes_importar_layout.setSpacing(8)
+
+        self.btn_importar = QPushButton("📥 Word (.docx)")
         self.btn_importar.setStyleSheet("""
             QPushButton { background-color: #f1f5f9; color: #0f172a; border: 1px solid #cbd5e1; padding: 10px; font-weight: bold; border-radius: 6px; }
             QPushButton:hover { background-color: #e2e8f0; }
         """)
         self.btn_importar.clicked.connect(self.importar_modelo_word)
-        self.left_layout.addWidget(self.btn_importar)
+        botoes_importar_layout.addWidget(self.btn_importar)
+
+        self.btn_importar_pdf = QPushButton("📥 PDF")
+        self.btn_importar_pdf.setStyleSheet("""
+            QPushButton { background-color: #f1f5f9; color: #0f172a; border: 1px solid #cbd5e1; padding: 10px; font-weight: bold; border-radius: 6px; }
+            QPushButton:hover { background-color: #e2e8f0; }
+        """)
+        self.btn_importar_pdf.clicked.connect(self.importar_modelo_pdf)
+        botoes_importar_layout.addWidget(self.btn_importar_pdf)
+
+        self.left_layout.addLayout(botoes_importar_layout)
         
         self.btn_criar_modelo = QPushButton("🛠️ Montar Novo Modelo")
         self.btn_criar_modelo.setStyleSheet("""
@@ -137,6 +166,34 @@ class FichasScreen(QWidget):
         """)
         self.btn_criar_modelo.clicked.connect(self.iniciar_criacao_modelo)
         self.left_layout.addWidget(self.btn_criar_modelo)
+
+        # --- SEÇÃO DE ANEXOS (fotos/PDFs vinculados ao atendimento atual) ---
+        sep_anexos = QFrame()
+        sep_anexos.setStyleSheet("background-color: #e2e8f0; max-height: 1px; border: none; margin: 8px 0;")
+        self.left_layout.addWidget(sep_anexos)
+
+        self.left_layout.addWidget(QLabel("3. Anexos do Atendimento:"))
+
+        self.anexos_scroll = QScrollArea()
+        self.anexos_scroll.setWidgetResizable(True)
+        self.anexos_scroll.setFixedHeight(90)
+        self.anexos_scroll.setStyleSheet("QScrollArea { border: 1px solid #e2e8f0; border-radius: 6px; background-color: #f8fafc; }")
+        self.anexos_strip_widget = QWidget()
+        self.anexos_strip_widget.setStyleSheet("background-color: #f8fafc;")
+        self.anexos_strip_layout = QHBoxLayout(self.anexos_strip_widget)
+        self.anexos_strip_layout.setContentsMargins(6, 6, 6, 6)
+        self.anexos_strip_layout.setSpacing(6)
+        self.anexos_strip_layout.addStretch()
+        self.anexos_scroll.setWidget(self.anexos_strip_widget)
+        self.left_layout.addWidget(self.anexos_scroll)
+
+        self.btn_anexar_arquivo = QPushButton("📎 Anexar Foto ou PDF")
+        self.btn_anexar_arquivo.setStyleSheet("""
+            QPushButton { background-color: #fffbeb; color: #92400e; border: 1px solid #fde68a; padding: 8px; font-weight: bold; border-radius: 6px; font-size: 12px; }
+            QPushButton:hover { background-color: #fef3c7; }
+        """)
+        self.btn_anexar_arquivo.clicked.connect(self.anexar_arquivos)
+        self.left_layout.addWidget(self.btn_anexar_arquivo)
         
         self.left_layout.addStretch()
         
@@ -176,6 +233,7 @@ class FichasScreen(QWidget):
         self.carregar_modelos_iniciais_combo()
         self.carregar_pacientes_combo()
         self.gerar_modelo_padrao()
+        self.renderizar_anexos_thumbnails()
         
         self.combo_modelo.currentTextChanged.connect(self.alterar_modelo_ficha)
 
@@ -305,12 +363,16 @@ class FichasScreen(QWidget):
         btn_add_curto = QPushButton("+ Texto Curto")
         btn_add_longo = QPushButton("+ Texto Longo")
         btn_add_check = QPushButton("+ Caixa de Seleção")
+        btn_add_numero = QPushButton("+ Número")
+        btn_add_data = QPushButton("+ Data")
+        btn_add_multipla = QPushButton("+ Múltipla Escolha")
         
         estilo_botoes_add = """
             QPushButton { background-color: #f8fafc; color: #334155; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; font-weight: bold; font-size: 12px;}
             QPushButton:hover { background-color: #f1f5f9; border: 1px solid #94a3b8; }
         """
-        for b in [btn_add_secao, btn_add_curto, btn_add_longo, btn_add_check]:
+        botoes_add = [btn_add_secao, btn_add_curto, btn_add_longo, btn_add_check, btn_add_numero, btn_add_data, btn_add_multipla]
+        for b in botoes_add:
             b.setStyleSheet(estilo_botoes_add)
             btn_layout.addWidget(b)
             
@@ -318,6 +380,9 @@ class FichasScreen(QWidget):
         btn_add_curto.clicked.connect(lambda: self.adicionar_elemento_rascunho("texto_curto"))
         btn_add_longo.clicked.connect(lambda: self.adicionar_elemento_rascunho("texto_longo"))
         btn_add_check.clicked.connect(lambda: self.adicionar_elemento_rascunho("checkbox"))
+        btn_add_numero.clicked.connect(lambda: self.adicionar_elemento_rascunho("numero"))
+        btn_add_data.clicked.connect(lambda: self.adicionar_elemento_rascunho("data"))
+        btn_add_multipla.clicked.connect(lambda: self.adicionar_elemento_rascunho("multipla_escolha"))
         
         self.dinamic_form_layout.addLayout(btn_layout)
         
@@ -352,9 +417,21 @@ class FichasScreen(QWidget):
         self.atualizar_visualizacao_preview()
 
     def adicionar_elemento_rascunho(self, tipo):
-        dialog_tit = "Nova Seção" if tipo == "secao" else "Novo Campo"
-        dialog_msg = "Digite o título da seção divisor:" if tipo == "secao" else "Digite o nome da pergunta/campo (ex: Histórico Familiar):"
-        
+        titulos = {
+            "secao": "Nova Seção",
+            "numero": "Novo Campo Numérico",
+            "data": "Novo Campo de Data",
+            "multipla_escolha": "Nova Pergunta de Múltipla Escolha",
+        }
+        mensagens = {
+            "secao": "Digite o título da seção divisor:",
+            "numero": "Digite o nome do campo (ex: Peso, Altura, Idade):",
+            "data": "Digite o nome do campo de data (ex: Data do Exame):",
+            "multipla_escolha": "Digite o texto da pergunta:",
+        }
+        dialog_tit = titulos.get(tipo, "Novo Campo")
+        dialog_msg = mensagens.get(tipo, "Digite o nome da pergunta/campo (ex: Histórico Familiar):")
+
         dial = CustomInputDialog(dialog_tit, dialog_msg, self)
         if dial.exec() == QDialog.Accepted:
             texto = dial.get_text()
@@ -364,8 +441,27 @@ class FichasScreen(QWidget):
             
         texto_limpo = "".join(c for c in texto if c.isalnum()).lower()
         id_campo = f"custom_{int(datetime.now().timestamp())}_{texto_limpo}"
-        self.modelo_atual_campos.append({"tipo": tipo, "label": texto, "id": id_campo})
-        
+        novo_campo = {"tipo": tipo, "label": texto, "id": id_campo}
+
+        if tipo == "numero":
+            dial_unidade = CustomInputDialog("Unidade (opcional)", "Ex: kg, cm, anos, mmHg — deixe em branco se não tiver:", self)
+            if dial_unidade.exec() == QDialog.Accepted:
+                unidade = dial_unidade.get_text().strip()
+                if unidade:
+                    novo_campo["unidade"] = unidade
+
+        elif tipo == "multipla_escolha":
+            dial_opcoes = CustomInputDialog("Opções de Resposta", "Digite as opções separadas por vírgula (ex: Sim, Não, Não sei):", self)
+            if dial_opcoes.exec() != QDialog.Accepted:
+                return
+            texto_opcoes = dial_opcoes.get_text().strip()
+            opcoes = [o.strip() for o in texto_opcoes.split(",") if o.strip()]
+            if len(opcoes) < 2:
+                self.exibir_popup("aviso", "Opções insuficientes", "Informe pelo menos 2 opções separadas por vírgula.")
+                return
+            novo_campo["opcoes"] = opcoes
+
+        self.modelo_atual_campos.append(novo_campo)
         self.atualizar_visualizacao_preview()
 
     def atualizar_visualizacao_preview(self):
@@ -381,23 +477,32 @@ class FichasScreen(QWidget):
         estilo_label = "color: #334155 !important; font-weight: bold; font-size: 13px; margin-top: 4px; background-color: transparent;"
         estilo_input_curto = "QLineEdit { background-color: #f8fafc !important; color: #0f172a !important; border: 1px solid #cbd5e1 !important; border-radius: 6px; padding: 8px 12px; font-size: 13px; }"
         estilo_input_longo = "QTextEdit { background-color: #f8fafc !important; color: #0f172a !important; border: 1px solid #cbd5e1 !important; border-radius: 6px; padding: 8px 12px; font-size: 13px; }"
+        estilo_btn_ferramenta = "QPushButton { background-color: #ffffff; color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 10px; padding: 2px; } QPushButton:hover { background-color: #f1f5f9; }"
 
-        for campo in self.modelo_atual_campos:
+        total_campos = len(self.modelo_atual_campos)
+
+        for indice, campo in enumerate(self.modelo_atual_campos):
             tipo = campo.get("tipo")
             label = campo.get("label")
-            
+
+            # --- Linha externa: conteúdo do campo (esquerda) + ferramentas (direita) ---
+            linha_container = QFrame()
+            linha_container.setStyleSheet("QFrame { border: 1px dashed #e2e8f0; border-radius: 6px; }")
+            linha_layout = QHBoxLayout(linha_container)
+            linha_layout.setContentsMargins(8, 6, 8, 6)
+            linha_layout.setSpacing(8)
+
+            conteudo_layout = QVBoxLayout()
+            conteudo_layout.setSpacing(2)
+
             if tipo == "secao":
-                container = QWidget()
-                lay = QVBoxLayout(container)
-                lay.setContentsMargins(0, 10, 0, 4)
                 secao_label = QLabel(label.upper())
                 secao_label.setStyleSheet("color: #0284c7 !important; font-size: 14px; font-weight: bold; background-color: transparent;")
                 secao_frame = QFrame()
                 secao_frame.setStyleSheet("background-color: #cbd5e1 !important; max-height: 1px; border: none;")
-                lay.addWidget(secao_label)
-                lay.addWidget(secao_frame)
-                self.preview_layout.addWidget(container)
-                
+                conteudo_layout.addWidget(secao_label)
+                conteudo_layout.addWidget(secao_frame)
+
             elif tipo == "texto_curto":
                 lbl = QLabel(label)
                 lbl.setStyleSheet(estilo_label)
@@ -405,9 +510,9 @@ class FichasScreen(QWidget):
                 inp.setPlaceholderText("Área de Visualização do Input Curto")
                 inp.setReadOnly(True)
                 inp.setStyleSheet(estilo_input_curto)
-                self.preview_layout.addWidget(lbl)
-                self.preview_layout.addWidget(inp)
-                
+                conteudo_layout.addWidget(lbl)
+                conteudo_layout.addWidget(inp)
+
             elif tipo == "texto_longo":
                 lbl = QLabel(label)
                 lbl.setStyleSheet(estilo_label)
@@ -417,16 +522,120 @@ class FichasScreen(QWidget):
                 inp.setMinimumHeight(50)
                 inp.setMaximumHeight(70)
                 inp.setStyleSheet(estilo_input_longo)
-                self.preview_layout.addWidget(lbl)
-                self.preview_layout.addWidget(inp)
-                
+                conteudo_layout.addWidget(lbl)
+                conteudo_layout.addWidget(inp)
+
             elif tipo == "checkbox":
                 chk = QCheckBox(label)
                 chk.setEnabled(False)
                 chk.setStyleSheet("QCheckBox { color: #0f172a !important; font-size: 13px; font-weight: 500; padding: 4px; background-color: transparent; }")
-                self.preview_layout.addWidget(chk)
+                conteudo_layout.addWidget(chk)
+
+            elif tipo == "numero":
+                unidade = campo.get("unidade", "")
+                lbl = QLabel(f"{label} ({unidade})" if unidade else label)
+                lbl.setStyleSheet(estilo_label)
+                inp = QLineEdit()
+                inp.setPlaceholderText(f"Área de Visualização — número{f' em {unidade}' if unidade else ''}")
+                inp.setReadOnly(True)
+                inp.setStyleSheet(estilo_input_curto)
+                conteudo_layout.addWidget(lbl)
+                conteudo_layout.addWidget(inp)
+
+            elif tipo == "data":
+                lbl = QLabel(label)
+                lbl.setStyleSheet(estilo_label)
+                inp = QDateEdit()
+                inp.setCalendarPopup(True)
+                inp.setDate(QDate.currentDate())
+                inp.setEnabled(False)
+                inp.setStyleSheet("QDateEdit { background-color: #f8fafc !important; color: #0f172a !important; border: 1px solid #cbd5e1 !important; border-radius: 6px; padding: 6px 10px; font-size: 13px; }")
+                conteudo_layout.addWidget(lbl)
+                conteudo_layout.addWidget(inp)
+
+            elif tipo == "multipla_escolha":
+                lbl = QLabel(label)
+                lbl.setStyleSheet(estilo_label)
+                conteudo_layout.addWidget(lbl)
+                for opcao in campo.get("opcoes", []):
+                    radio = QRadioButton(opcao)
+                    radio.setEnabled(False)
+                    radio.setStyleSheet("QRadioButton { color: #0f172a !important; font-size: 13px; padding: 2px; background-color: transparent; }")
+                    conteudo_layout.addWidget(radio)
+
+            linha_layout.addLayout(conteudo_layout, stretch=1)
+
+            # --- Ferramentas: mover pra cima/baixo, editar rótulo, excluir ---
+            ferramentas_layout = QVBoxLayout()
+            ferramentas_layout.setSpacing(2)
+
+            linha_botoes_topo = QHBoxLayout()
+            linha_botoes_topo.setSpacing(2)
+
+            btn_subir = QPushButton("▲")
+            btn_subir.setFixedSize(22, 20)
+            btn_subir.setStyleSheet(estilo_btn_ferramenta)
+            btn_subir.setEnabled(indice > 0)
+            btn_subir.clicked.connect(lambda _, i=indice: self.mover_campo_rascunho(i, -1))
+            linha_botoes_topo.addWidget(btn_subir)
+
+            btn_descer = QPushButton("▼")
+            btn_descer.setFixedSize(22, 20)
+            btn_descer.setStyleSheet(estilo_btn_ferramenta)
+            btn_descer.setEnabled(indice < total_campos - 1)
+            btn_descer.clicked.connect(lambda _, i=indice: self.mover_campo_rascunho(i, 1))
+            linha_botoes_topo.addWidget(btn_descer)
+
+            ferramentas_layout.addLayout(linha_botoes_topo)
+
+            linha_botoes_baixo = QHBoxLayout()
+            linha_botoes_baixo.setSpacing(2)
+
+            btn_editar = QPushButton("✏️")
+            btn_editar.setFixedSize(22, 20)
+            btn_editar.setStyleSheet(estilo_btn_ferramenta)
+            btn_editar.clicked.connect(lambda _, i=indice: self.editar_campo_rascunho(i))
+            linha_botoes_baixo.addWidget(btn_editar)
+
+            btn_excluir = QPushButton("🗑️")
+            btn_excluir.setFixedSize(22, 20)
+            btn_excluir.setStyleSheet("QPushButton { background-color: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; border-radius: 4px; font-size: 10px; padding: 2px; } QPushButton:hover { background-color: #fecaca; }")
+            btn_excluir.clicked.connect(lambda _, i=indice: self.remover_campo_rascunho(i))
+            linha_botoes_baixo.addWidget(btn_excluir)
+
+            ferramentas_layout.addLayout(linha_botoes_baixo)
+
+            linha_layout.addLayout(ferramentas_layout)
+
+            self.preview_layout.addWidget(linha_container)
 
         self.scroll_content.adjustSize()
+
+    def mover_campo_rascunho(self, indice, direcao):
+        """Troca o campo de posição com o vizinho (direcao = -1 sobe, +1 desce)."""
+        novo_indice = indice + direcao
+        if 0 <= novo_indice < len(self.modelo_atual_campos):
+            self.modelo_atual_campos[indice], self.modelo_atual_campos[novo_indice] = \
+                self.modelo_atual_campos[novo_indice], self.modelo_atual_campos[indice]
+            self.atualizar_visualizacao_preview()
+
+    def editar_campo_rascunho(self, indice):
+        """Abre um diálogo pré-preenchido para renomear o rótulo do campo/seção."""
+        if not (0 <= indice < len(self.modelo_atual_campos)):
+            return
+        campo = self.modelo_atual_campos[indice]
+        dial = CustomInputDialog("Editar Campo", "Novo texto para este campo/seção:", self)
+        dial.input_field.setText(campo.get("label", ""))
+        if dial.exec() == QDialog.Accepted:
+            novo_texto = dial.get_text()
+            if novo_texto:
+                campo["label"] = novo_texto
+                self.atualizar_visualizacao_preview()
+
+    def remover_campo_rascunho(self, indice):
+        if 0 <= indice < len(self.modelo_atual_campos):
+            self.modelo_atual_campos.pop(indice)
+            self.atualizar_visualizacao_preview()
 
     def salvar_modelo_customizado_db(self):
         if not self.modelo_atual_campos:
@@ -467,6 +676,57 @@ class FichasScreen(QWidget):
         except Exception as e:
             self.exibir_popup("erro", "Erro ao Salvar", f"Falha ao gravar no banco:\n{str(e)}")
 
+    def _detectar_campos_a_partir_de_linhas(self, linhas_texto):
+        """Heurística compartilhada: recebe uma lista de linhas de texto (extraídas
+        de um .docx ou .pdf) e tenta identificar seções, campos de texto curto/longo
+        e caixas de seleção. Usada tanto pelo importador de Word quanto de PDF."""
+        novos_campos = []
+        chaves_existentes = set()
+
+        for texto in linhas_texto:
+            if ":" in texto:
+                partes = texto.split(":")
+                label_campo = partes[0].replace(",", "").replace("-", "").strip()
+
+                if not label_campo or len(label_campo) < 2 or len(label_campo) > 60:
+                    continue
+
+                id_campo = "".join(c for c in label_campo if c.isalnum()).lower()
+                if id_campo in chaves_existentes:
+                    continue
+                chaves_existentes.add(id_campo)
+
+                if "[" in texto or "]" in texto or "( )" in texto:
+                    novos_campos.append({"tipo": "checkbox", "label": label_campo, "id": id_campo})
+                else:
+                    id_min = id_campo.lower()
+                    if any(x in id_min for x in ["qp", "hda", "conduta", "antecedentes", "historico", "outros", "medicamentos", "observacoes"]):
+                        tipo_campo = "texto_longo"
+                    else:
+                        tipo_campo = "texto_curto"
+                    novos_campos.append({"tipo": tipo_campo, "label": label_campo, "id": id_campo})
+
+            elif len(texto) < 50 and (texto.isupper() or len(texto) < 30):
+                texto_limpo = texto.replace("-", "").replace(",", "").strip()
+                if texto_limpo and len(texto_limpo) > 2:
+                    novos_campos.append({"tipo": "secao", "label": texto_limpo})
+
+        return novos_campos
+
+    def _aplicar_modelo_importado(self, novos_campos, nome_arquivo):
+        if novos_campos:
+            self.modo_criacao = False
+            self.modelo_atual_campos = novos_campos
+            self.renderizar_formulario_dinamico()
+
+            nome_reduzido = os.path.basename(nome_arquivo)
+            if self.combo_modelo.findText(f"✨ {nome_reduzido}") == -1:
+                self.combo_modelo.addItem(f"✨ {nome_reduzido}")
+            self.combo_modelo.setCurrentText(f"✨ {nome_reduzido}")
+            self.exibir_popup("info", "Sucesso", f"Modelo carregado!\n{len(novos_campos)} elementos criados.")
+        else:
+            self.exibir_popup("aviso", "Aviso", "Nenhum campo estruturado foi identificado.")
+
     def importar_modelo_word(self):
         if not DOCX_DISPONIVEL or Document is None:
             self.exibir_popup("erro", "Módulo Ausente", "A biblioteca 'python-docx' é necessária.\npip install python-docx")
@@ -492,51 +752,147 @@ class FichasScreen(QWidget):
                                 rastro = sub_val.strip()
                                 if rastro.replace(",", "").strip():
                                     linhas_texto.append(rastro)
-            
-            novos_campos = []
-            chaves_existentes = set()
-            
-            for texto in linhas_texto:
-                if ":" in texto:
-                    partes = texto.split(":")
-                    label_campo = partes[0].replace(",", "").replace("-", "").strip()
-                    
-                    if not label_campo or len(label_campo) < 2 or len(label_campo) > 60:
-                        continue
-                    
-                    id_campo = "".join(c for c in label_campo if c.isalnum()).lower()
-                    if id_campo in chaves_existentes: continue
-                    chaves_existentes.add(id_campo)
-                    
-                    if "[" in texto or "]" in texto or "( )" in texto:
-                        novos_campos.append({"tipo": "checkbox", "label": label_campo, "id": id_campo})
-                    else:
-                        id_min = id_campo.lower()
-                        if any(x in id_min for x in ["qp", "hda", "conduta", "antecedentes", "historico", "outros", "medicamentos", "observacoes"]):
-                            tipo_campo = "texto_longo"
-                        else:
-                            tipo_campo = "texto_curto"
-                        novos_campos.append({"tipo": tipo_campo, "label": label_campo, "id": id_campo})
-                
-                elif len(texto) < 50 and (texto.isupper() or len(texto) < 30):
-                    texto_limpo = texto.replace("-", "").replace(",", "").strip()
-                    if texto_limpo and len(texto_limpo) > 2:
-                        novos_campos.append({"tipo": "secao", "label": texto_limpo})
 
-            if novos_campos:
-                self.modo_criacao = False
-                self.modelo_atual_campos = novos_campos
-                self.renderizar_formulario_dinamico()
-                
-                nome_reduzido = os.path.basename(file_path)
-                if self.combo_modelo.findText(f"✨ {nome_reduzido}") == -1:
-                    self.combo_modelo.addItem(f"✨ {nome_reduzido}")
-                self.combo_modelo.setCurrentText(f"✨ {nome_reduzido}")
-                self.exibir_popup("info", "Sucesso", f"Modelo carregado!\n{len(novos_campos)} elementos criados.")
-            else:
-                self.exibir_popup("aviso", "Aviso", "Nenhum campo estruturado foi identificado.")
+            novos_campos = self._detectar_campos_a_partir_de_linhas(linhas_texto)
+            self._aplicar_modelo_importado(novos_campos, file_path)
         except Exception as e:
             self.exibir_popup("erro", "Falha de Leitura", f"Erro:\n{str(e)}")
+
+    def importar_modelo_pdf(self):
+        """Lê um PDF (anamnese, relatório, exame estruturado) e tenta montar
+        um novo modelo de ficha automaticamente, com a mesma heurística usada
+        para arquivos Word."""
+        if not PDF_DISPONIVEL or PdfReader is None:
+            self.exibir_popup("erro", "Módulo Ausente", "A biblioteca 'pypdf' é necessária.\npip install pypdf")
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(self, "Selecionar Ficha em PDF", "", "Arquivos PDF (*.pdf)")
+        if not file_path:
+            return
+
+        try:
+            leitor = PdfReader(file_path)
+            linhas_texto = []
+            for pagina in leitor.pages:
+                texto_pagina = pagina.extract_text() or ""
+                for linha in texto_pagina.split("\n"):
+                    linha_limpa = linha.strip()
+                    if linha_limpa:
+                        linhas_texto.append(linha_limpa)
+
+            novos_campos = self._detectar_campos_a_partir_de_linhas(linhas_texto)
+            self._aplicar_modelo_importado(novos_campos, file_path)
+        except Exception as e:
+            self.exibir_popup("erro", "Falha de Leitura", f"Erro ao ler o PDF:\n{str(e)}")
+
+    # ============================================================
+    # ANEXOS (fotos / PDFs vinculados à ficha preenchida atual)
+    # ============================================================
+    def anexar_arquivos(self):
+        caminhos, _ = QFileDialog.getOpenFileNames(self, "Selecionar Foto(s) ou PDF(s)", "", EXTENSOES_ANEXO_ACEITAS)
+        if not caminhos:
+            return
+        for caminho in caminhos:
+            self.arquivos_anexados.append(caminho)
+        self.renderizar_anexos_thumbnails()
+
+    def remover_anexo(self, indice):
+        if 0 <= indice < len(self.arquivos_anexados):
+            self.arquivos_anexados.pop(indice)
+        self.renderizar_anexos_thumbnails()
+
+    def visualizar_anexo_local(self, caminho):
+        """Abre uma foto ampliada dentro do app, ou um PDF no visualizador padrão do sistema."""
+        extensao = os.path.splitext(caminho)[1].lower()
+        if extensao == ".pdf":
+            QDesktopServices.openUrl(QUrl.fromLocalFile(caminho))
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(os.path.basename(caminho))
+        dialog.setStyleSheet("background-color: #ffffff;")
+        layout_dialog = QVBoxLayout(dialog)
+        lbl_imagem = QLabel()
+        pixmap = QPixmap(caminho)
+        if not pixmap.isNull():
+            pixmap = pixmap.scaled(700, 700, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            lbl_imagem.setPixmap(pixmap)
+        layout_dialog.addWidget(lbl_imagem)
+        dialog.exec()
+
+    def renderizar_anexos_thumbnails(self):
+        # Limpa a tira de miniaturas
+        while self.anexos_strip_layout.count():
+            item = self.anexos_strip_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        for indice, caminho in enumerate(self.arquivos_anexados):
+            extensao = os.path.splitext(caminho)[1].lower()
+            miniatura = QFrame()
+            miniatura.setFixedSize(72, 72)
+            miniatura.setStyleSheet("QFrame { background-color: white; border: 1px solid #cbd5e1; border-radius: 6px; }")
+            lay_mini = QVBoxLayout(miniatura)
+            lay_mini.setContentsMargins(2, 2, 2, 2)
+            lay_mini.setSpacing(0)
+
+            if extensao == ".pdf":
+                lbl = QLabel("📄\nPDF")
+                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                lbl.setStyleSheet("font-size: 11px; font-weight: bold; color: #0f172a; border: none; background: transparent;")
+            else:
+                lbl = QLabel()
+                pixmap = QPixmap(caminho)
+                if not pixmap.isNull():
+                    pixmap = pixmap.scaled(64, 50, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    lbl.setPixmap(pixmap)
+                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                lbl.setStyleSheet("border: none; background: transparent;")
+            lay_mini.addWidget(lbl)
+
+            btn_remover = QPushButton("✕")
+            btn_remover.setFixedSize(16, 16)
+            btn_remover.setStyleSheet("QPushButton { background-color: #fee2e2; color: #b91c1c; font-size: 10px; font-weight: bold; border: none; border-radius: 8px; } QPushButton:hover { background-color: #fca5a5; }")
+            btn_remover.clicked.connect(lambda _, i=indice: self.remover_anexo(i))
+            lay_mini.addWidget(btn_remover, alignment=Qt.AlignmentFlag.AlignRight)
+
+            miniatura.mousePressEvent = lambda event, c=caminho: self.visualizar_anexo_local(c)
+
+            self.anexos_strip_layout.addWidget(miniatura)
+
+        self.anexos_strip_layout.addStretch()
+
+    def _fazer_upload_anexos(self, paciente_id):
+        """Envia cada arquivo pendente para o Supabase Storage e retorna a lista
+        de metadados (nome, caminho no bucket, tipo) já pronta para salvar no banco."""
+        lista_metadados = []
+        if not self.arquivos_anexados or not self.db.supabase:
+            return lista_metadados
+
+        for caminho_local in self.arquivos_anexados:
+            try:
+                nome_original = os.path.basename(caminho_local)
+                extensao = os.path.splitext(nome_original)[1]
+                nome_unico = f"{uuid.uuid4().hex}{extensao}"
+                caminho_no_bucket = f"{self.db.consultorio_id}/{paciente_id}/{nome_unico}"
+                tipo_mime = mimetypes.guess_type(nome_original)[0] or "application/octet-stream"
+
+                with open(caminho_local, "rb") as arquivo:
+                    self.db.supabase.storage.from_(NOME_BUCKET_ANEXOS).upload(
+                        caminho_no_bucket,
+                        arquivo.read(),
+                        {"content-type": tipo_mime}
+                    )
+
+                lista_metadados.append({
+                    "nome": nome_original,
+                    "caminho": caminho_no_bucket,
+                    "tipo": tipo_mime
+                })
+            except Exception as e:
+                print(f"Erro ao enviar anexo '{caminho_local}': {e}")
+
+        return lista_metadados
 
     def renderizar_formulario_dinamico(self):
         self.limpar_layout_completamente(self.dinamic_form_layout)
@@ -592,6 +948,42 @@ class FichasScreen(QWidget):
                 self.dinamic_form_layout.addWidget(chk)
                 self.widgets_dinamicos[id_campo] = ("checkbox", chk)
 
+            elif tipo == "numero":
+                unidade = campo.get("unidade", "")
+                lbl = QLabel(f"{label} ({unidade})" if unidade else label)
+                lbl.setStyleSheet(estilo_label)
+                inp = QLineEdit()
+                inp.setValidator(QDoubleValidator())
+                inp.setPlaceholderText(f"Digite um número{f' em {unidade}' if unidade else ''}...")
+                inp.setStyleSheet(estilo_input_curto)
+                self.dinamic_form_layout.addWidget(lbl)
+                self.dinamic_form_layout.addWidget(inp)
+                self.widgets_dinamicos[id_campo] = ("numero", inp)
+
+            elif tipo == "data":
+                lbl = QLabel(label)
+                lbl.setStyleSheet(estilo_label)
+                inp = QDateEdit()
+                inp.setCalendarPopup(True)
+                inp.setDisplayFormat("dd/MM/yyyy")
+                inp.setDate(QDate.currentDate())
+                inp.setStyleSheet("QDateEdit { background-color: #ffffff !important; color: #0f172a !important; border: 1px solid #cbd5e1 !important; border-radius: 6px; padding: 7px 10px; font-size: 13px; }")
+                self.dinamic_form_layout.addWidget(lbl)
+                self.dinamic_form_layout.addWidget(inp)
+                self.widgets_dinamicos[id_campo] = ("data", inp)
+
+            elif tipo == "multipla_escolha":
+                lbl = QLabel(label)
+                lbl.setStyleSheet(estilo_label)
+                self.dinamic_form_layout.addWidget(lbl)
+                grupo_radio = QButtonGroup(self)
+                for opcao in campo.get("opcoes", []):
+                    radio = QRadioButton(opcao)
+                    radio.setStyleSheet("QRadioButton { color: #0f172a !important; font-size: 13px; padding: 3px; background-color: transparent; }")
+                    grupo_radio.addButton(radio)
+                    self.dinamic_form_layout.addWidget(radio)
+                self.widgets_dinamicos[id_campo] = ("multipla_escolha", grupo_radio)
+
         self.dinamic_form_layout.addStretch()
         self.scroll_content.adjustSize()
 
@@ -610,6 +1002,11 @@ class FichasScreen(QWidget):
             if tipo == "texto_curto": respostas[id_campo] = widget.text().strip()
             elif tipo == "texto_longo": respostas[id_campo] = widget.toPlainText().strip()
             elif tipo == "checkbox": respostas[id_campo] = widget.isChecked()
+            elif tipo == "numero": respostas[id_campo] = widget.text().strip()
+            elif tipo == "data": respostas[id_campo] = widget.date().toString("dd/MM/yyyy")
+            elif tipo == "multipla_escolha":
+                botao_marcado = widget.checkedButton()
+                respostas[id_campo] = botao_marcado.text() if botao_marcado else ""
                 
         string_respostas = json.dumps(respostas, ensure_ascii=False)
         modelo_nome = self.combo_modelo.currentText()
@@ -627,13 +1024,29 @@ class FichasScreen(QWidget):
                 "data_atendimento": data_atual
             }
             
-            self.db.supabase.table("fichas_preenchidas").insert(payload).execute()
+            resposta_insert = self.db.supabase.table("fichas_preenchidas").insert(payload).execute()
+
+            # Se houver fotos/PDFs pendentes, envia agora para o Storage e vincula à ficha recém-criada
+            if self.arquivos_anexados and resposta_insert.data:
+                ficha_id = resposta_insert.data[0]["id"]
+                metadados_anexos = self._fazer_upload_anexos(paciente_id)
+                if metadados_anexos:
+                    self.db.supabase.table("fichas_preenchidas")\
+                        .update({"anexos": json.dumps(metadados_anexos, ensure_ascii=False)})\
+                        .eq("id", ficha_id)\
+                        .execute()
             
             # Limpa os campos após salvar com sucesso
             for tipo, widget in self.widgets_dinamicos.values():
                 if tipo == "texto_curto": widget.clear()
                 elif tipo == "texto_longo": widget.clear()
                 elif tipo == "checkbox": widget.setChecked(False)
+                elif tipo == "numero": widget.clear()
+                elif tipo == "data": widget.setDate(QDate.currentDate())
+                elif tipo == "multipla_escolha": widget.setExclusive(False); [b.setChecked(False) for b in widget.buttons()]; widget.setExclusive(True)
+
+            self.arquivos_anexados = []
+            self.renderizar_anexos_thumbnails()
                 
             self.exibir_popup("info", "Ficha Salva", "O atendimento foi registrado com sucesso!")
         except Exception as e:

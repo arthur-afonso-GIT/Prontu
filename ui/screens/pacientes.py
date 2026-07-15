@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QComboBox, QDateEdit, QHeaderView, QFrame, QTextEdit, QMessageBox, 
                                QListWidget, QListWidgetItem, QDialog)
 from PySide6.QtCore import Qt, QDate
-from database import Database  # Importa o gerenciador de banco de dados unificado
+from PySide6.QtGui import QColor
 
 class VisualizarFichaHistoricoDialog(QDialog):
     """Janela pop-up para ler uma ficha clínica antiga do histórico"""
@@ -55,13 +55,15 @@ class VisualizarFichaHistoricoDialog(QDialog):
 
 
 class PacientesScreen(QWidget):
-    def __init__(self):
+    def __init__(self, database_instancia):
         super().__init__()
         
-        self.db = Database()  # Instancia a conexão unificada com o Supabase
+        # Recebe a conexão única já configurada e autenticada a partir da MainWindow
+        self.db = database_instancia
         
         self.id_em_edicao = -1
         self.row_em_edicao = -1
+        self.pastas_cores = {}  # Preenchido pela MainWindow: {nome_da_pasta: "#hex"}
         
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(15, 15, 15, 15)
@@ -481,10 +483,26 @@ class PacientesScreen(QWidget):
                 print(f"Erro ao obter pacientes do Supabase: {e}")
                 rows = []
                 
+        # Índice da coluna "pasta" dentro de cada tupla de row_data (id, nome, telefone, convenio, pasta)
+        indice_coluna_pasta = 4
+
         for row_idx, row_data in enumerate(rows):
             self.tabela.insertRow(row_idx)
             for col_idx, value in enumerate(row_data):
                 item = QTableWidgetItem(str(value if value is not None else ""))
+
+                if col_idx == indice_coluna_pasta and value:
+                    cor_hex = self.pastas_cores.get(str(value), None)
+                    if cor_hex:
+                        cor_qt = QColor(cor_hex)
+                        item.setForeground(cor_qt)
+                        cor_fundo = QColor(cor_hex)
+                        cor_fundo.setAlpha(28)  # badge suave, não cobre o texto
+                        item.setBackground(cor_fundo)
+                        font = item.font()
+                        font.setBold(True)
+                        item.setFont(font)
+
                 self.tabela.setItem(row_idx, col_idx, item)
 
     def carregar_paciente_selecionado(self):
@@ -584,7 +602,7 @@ class PacientesScreen(QWidget):
                 nome = str(p.get("nome") or "").lower()
                 fone = str(p.get("telefone") or "").lower()
                 conv = str(p.get("convenio") or "").lower()
-                pasta = str(p.get("pasta") or "")
+                pasta = str(p.get("pasta") or "").strip() or "Geral"
                 cpf = str(p.get("cpf") or "").lower()
                 rg = str(p.get("rg") or "").lower()
                 
@@ -592,7 +610,7 @@ class PacientesScreen(QWidget):
                 match_pasta = "Todas as Pastas" in pasta_filtro or pasta == pasta_filtro
                 
                 if match_texto and match_pasta:
-                    filtrados.append((p["id"], p.get("nome") or "", p.get("telefone") or "", p.get("convenio") or "", p.get("pasta") or ""))
+                    filtrados.append((p["id"], p.get("nome") or "", p.get("telefone") or "", p.get("convenio") or "", pasta))
                     
             self.carregar_pacientes_tabela(filtrados)
         except Exception as e:
@@ -602,12 +620,23 @@ class PacientesScreen(QWidget):
         self.combo_filtro_pasta.setCurrentText(nome_pasta)
         self.filtrar_pacientes()
 
+    def selecionar_paciente_por_id(self, paciente_id):
+        """Localiza a linha do paciente pelo ID e a seleciona, abrindo-o no
+        formulário de edição — usado ao abrir um paciente vindo da Home."""
+        for row in range(self.tabela.rowCount()):
+            item_id = self.tabela.item(row, 0)
+            if item_id and item_id.text() == str(paciente_id):
+                self.tabela.selectRow(row)
+                self.tabela.scrollToItem(item_id)
+                return True
+        return False
+
     def salvar_paciente(self):
         nome = self.input_nome.text().strip()
         fone = self.input_tel.text().strip()
         nasc = self.input_nasc.date().toString("yyyy-MM-dd")
         conv = self.input_convenio.text().strip()
-        pasta = self.input_pasta.currentText()
+        pasta = self.input_pasta.currentText().strip() or "Geral"
         sexo = self.input_sexo.currentText()
         cpf = self.input_cpf.text().strip()
         rg = self.input_rg.text().strip()
@@ -714,7 +743,13 @@ class PacientesScreen(QWidget):
         self.list_historico_fichas.clear()
         self.tabela.clearSelection()
         self.btn_excluir.setVisible(False)
-        if self.input_pasta.count() > 0: 
+        # Sempre garante que "Geral" (ou a primeira pasta válida) fique
+        # selecionada — nunca deixa o combo em branco (índice -1), que
+        # antes podia gravar o paciente com pasta="" (invisível na contagem).
+        indice_geral = self.input_pasta.findText("Geral")
+        if indice_geral != -1:
+            self.input_pasta.setCurrentIndex(indice_geral)
+        elif self.input_pasta.count() > 0:
             self.input_pasta.setCurrentIndex(0)
 
     def preencher_formulario_via_importacao(self, dados):
@@ -739,9 +774,15 @@ class PacientesScreen(QWidget):
         self.combo_filtro_pasta.addItem("📁 Todas as Pastas")
         self.input_pasta.clear()
         
+        # Filtra nomes vazios/só-espaço, que apareciam como um item "fantasma"
+        # (ícone sem texto) no dropdown caso alguma pasta tivesse sido salva
+        # com nome em branco em algum momento.
         for p in lista_pastas:
-            self.combo_filtro_pasta.addItem(p)
-            self.input_pasta.addItem(p)
+            nome_limpo = (p or "").strip()
+            if not nome_limpo:
+                continue
+            self.combo_filtro_pasta.addItem(nome_limpo)
+            self.input_pasta.addItem(nome_limpo)
             
         if self.combo_filtro_pasta.findText(pasta_atual_filtro) != -1:
             self.combo_filtro_pasta.setCurrentText(pasta_atual_filtro)

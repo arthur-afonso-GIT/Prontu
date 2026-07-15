@@ -1,8 +1,9 @@
 import os
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QFrame, QTableWidget, QHeaderView, QPushButton, 
-                               QInputDialog, QMessageBox, QTableWidgetItem)
+                               QInputDialog, QMessageBox, QTableWidgetItem, QColorDialog)
 from PySide6.QtCore import Qt, QDate
+from PySide6.QtGui import QColor
 from database import Database
 
 class HomeScreen(QWidget):
@@ -123,14 +124,19 @@ class HomeScreen(QWidget):
         self.table_recentes.verticalHeader().setVisible(False)
         self.table_recentes.setShowGrid(False)
         self.table_recentes.setFixedHeight(180)
+        self.table_recentes.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table_recentes.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table_recentes.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table_recentes.setStyleSheet("""
             QTableWidget { background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 13px; color: #334155; }
             QTableWidget::item { border-bottom: 1px solid #f1f5f9; padding: 6px; }
+            QTableWidget::item:selected { background-color: #e0f2fe; color: #0f172a; }
             QHeaderView::section { background-color: #f8fafc; font-weight: bold; color: #64748b; border: none; padding: 6px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: left; }
         """)
         h_rec = self.table_recentes.horizontalHeader()
         h_rec.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         h_rec.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_recentes.cellDoubleClicked.connect(self.abrir_paciente_recente)
         recentes_vbox.addWidget(self.table_recentes)
         split_tables_layout.addLayout(recentes_vbox, stretch=1)
         
@@ -157,34 +163,67 @@ class HomeScreen(QWidget):
                 child.widget().deleteLater()
                 
         lista_pastas = getattr(self.window_principal, 'pastas_sistema', ["Geral"])
+        cores_pastas = getattr(self.window_principal, 'pastas_cores', {})
         
         for nome_pasta in lista_pastas:
             qtd_pacientes = self.contar_pacientes_na_pasta_supabase(nome_pasta)
+            cor_pasta = cores_pastas.get(nome_pasta, "#0284c7")
             
             card = CardPasta(
                 nome=nome_pasta,
                 quantidade=qtd_pacientes,
+                cor=cor_pasta,
                 on_clique=self.on_pasta_click,
                 on_editar=self.acao_editar_pasta,
-                on_excluir=self.acao_excluir_pasta
+                on_excluir=self.acao_excluir_pasta,
+                on_mudar_cor=self.acao_mudar_cor_pasta
             )
             self.pastas_grid_layout.addWidget(card)
             
         self.carregar_dados_iniciais()
 
+    def acao_mudar_cor_pasta(self, nome_pasta):
+        """Abre o seletor de cores do sistema e salva a nova cor da pasta."""
+        cores_pastas = getattr(self.window_principal, 'pastas_cores', {})
+        cor_atual = QColor(cores_pastas.get(nome_pasta, "#0284c7"))
+
+        cor_escolhida = QColorDialog.getColor(cor_atual, self, f"Cor da pasta '{nome_pasta}'")
+        if cor_escolhida.isValid():
+            if hasattr(self.window_principal, 'atualizar_cor_pasta'):
+                self.window_principal.atualizar_cor_pasta(nome_pasta, cor_escolhida.name())
+            self.renderizar_lista_pastas()
+
     def contar_pacientes_na_pasta_supabase(self, nome_pasta):
         if not self.db.supabase:
             return 0
         try:
-            resposta = self.db.supabase.table("pacientes")\
+            nome_limpo = nome_pasta.strip()
+            query = self.db.supabase.table("pacientes")\
                 .select("id", count="exact")\
-                .eq("consultorio_id", self.db.consultorio_id)\
-                .ilike("pasta", nome_pasta.strip())\
-                .execute()
+                .eq("consultorio_id", self.db.consultorio_id)
+
+            if nome_limpo.lower() == "geral":
+                # "Geral" também deve contar pacientes antigos que ficaram com
+                # pasta em branco/nula no banco (cadastrados antes do valor
+                # padrão "Geral" ser sempre garantido no formulário).
+                query = query.or_(f"pasta.ilike.{nome_limpo},pasta.is.null,pasta.eq.")
+            else:
+                query = query.ilike("pasta", nome_limpo)
+
+            resposta = query.execute()
             return resposta.count if resposta.count is not None else 0
         except Exception as e:
             print(f"Erro ao contar pacientes da pasta: {e}")
             return 0
+
+    def abrir_paciente_recente(self, row, coluna):
+        """Duplo-clique numa linha de 'Recentes': abre o prontuário desse paciente na tela de Pacientes."""
+        item = self.table_recentes.item(row, 0)
+        if not item:
+            return
+        paciente_id = item.data(Qt.ItemDataRole.UserRole)
+        if paciente_id is not None and hasattr(self.window_principal, 'abrir_paciente_especifico'):
+            self.window_principal.abrir_paciente_especifico(paciente_id)
 
     def carregar_dados_iniciais(self):
         if not self.db.supabase:
@@ -194,7 +233,7 @@ class HomeScreen(QWidget):
             
             # 1. Total de Pacientes e preenchimento dos Recentes
             resposta_pacientes = self.db.supabase.table("pacientes")\
-                .select("nome, pasta")\
+                .select("id, nome, pasta")\
                 .eq("consultorio_id", self.db.consultorio_id)\
                 .order("id", desc=True)\
                 .execute()
@@ -206,7 +245,9 @@ class HomeScreen(QWidget):
             ultimos_pacientes = resposta_pacientes.data[:4] if resposta_pacientes.data else []
             for row_idx, item in enumerate(ultimos_pacientes):
                 self.table_recentes.insertRow(row_idx)
-                self.table_recentes.setItem(row_idx, 0, QTableWidgetItem(str(item["nome"]).upper()))
+                item_nome = QTableWidgetItem(str(item["nome"]).upper())
+                item_nome.setData(Qt.ItemDataRole.UserRole, item.get("id"))
+                self.table_recentes.setItem(row_idx, 0, item_nome)
                 self.table_recentes.setItem(row_idx, 1, QTableWidgetItem(str(item["pasta"]).upper()))
                 
             # 2. Consultas da agenda para Hoje
@@ -390,15 +431,15 @@ class CardMetrica(QFrame):
         self.lbl_valor.setText(novo_valor)
 
 class CardPasta(QFrame):
-    def __init__(self, nome, quantidade, on_clique=None, on_editar=None, on_excluir=None):
+    def __init__(self, nome, quantidade, cor="#0284c7", on_clique=None, on_editar=None, on_excluir=None, on_mudar_cor=None):
         super().__init__()
         self.nome_pasta = nome
         self.on_clique_callback = on_clique
         
         self.setFixedSize(175, 125)
-        self.setStyleSheet("""
-            QFrame { background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; }
-            QFrame:hover { border: 1px solid #0284c7; background-color: #fafafa; }
+        self.setStyleSheet(f"""
+            QFrame {{ background-color: white; border: 1px solid #e2e8f0; border-top: 4px solid {cor}; border-radius: 8px; }}
+            QFrame:hover {{ border: 1px solid #0284c7; border-top: 4px solid {cor}; background-color: #fafafa; }}
         """)
         
         layout = QVBoxLayout(self)
@@ -408,9 +449,12 @@ class CardPasta(QFrame):
         top_btn_layout = QHBoxLayout()
         top_btn_layout.setSpacing(2)
         
-        lbl_folder_icon = QLabel("📁")
-        lbl_folder_icon.setStyleSheet("font-size: 20px; border: none; background: transparent;")
-        top_btn_layout.addWidget(lbl_folder_icon)
+        btn_cor = QPushButton("📁")
+        btn_cor.setFixedSize(24, 24)
+        btn_cor.setToolTip("Clique para mudar a cor desta pasta")
+        btn_cor.setStyleSheet(f"font-size: 15px; border: none; border-radius: 4px; background-color: {cor}22;")
+        btn_cor.clicked.connect(lambda: on_mudar_cor(self.nome_pasta) if on_mudar_cor else None)
+        top_btn_layout.addWidget(btn_cor)
         top_btn_layout.addStretch()
         
         btn_edit = QPushButton("✏️")
