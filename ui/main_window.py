@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon, QPixmap
 
 from ui.screens.home import HomeScreen
-from ui.screens.pacientes import PacientesScreen
+from ui.screens.pacientes import PacientesScreen, normalizar_nome_pasta
 from ui.screens.agenda import AgendaScreen 
 from ui.screens.financeiro import FinanceiroScreen
 from ui.screens.configuracoes import ConfiguracoesScreen
@@ -286,10 +286,14 @@ class MainWindow(QMainWindow):
                 .order("nome")\
                 .execute()
             
-            pastas_atuais = [row["nome"].strip() for row in resposta.data if (row.get("nome") or "").strip()]
+            pastas_atuais = []
+            for row in resposta.data:
+                nome = normalizar_nome_pasta(row.get("nome"))
+                if nome and nome.casefold() not in {p.casefold() for p in pastas_atuais}:
+                    pastas_atuais.append(nome)
             self.pastas_cores = {
-                row["nome"].strip(): (row.get("cor") or "#0284c7")
-                for row in resposta.data if (row.get("nome") or "").strip()
+                normalizar_nome_pasta(row.get("nome")): (row.get("cor") or "#0284c7")
+                for row in resposta.data if normalizar_nome_pasta(row.get("nome"))
             }
             if pastas_atuais:
                 return pastas_atuais
@@ -305,7 +309,11 @@ class MainWindow(QMainWindow):
         if not self.db.supabase or self.db.consultorio_id is None:
             return
         try:
-            self.pastas_sistema = sorted(set(p.strip() for p in nova_lista if (p or "").strip()))
+            self.pastas_sistema = sorted({
+                normalizar_nome_pasta(p)
+                for p in nova_lista
+                if normalizar_nome_pasta(p)
+            })
             if not self.pastas_sistema:
                 self.pastas_sistema = ["Geral"]
             

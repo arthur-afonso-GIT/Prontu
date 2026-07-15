@@ -1,12 +1,24 @@
 import webbrowser
 import urllib.parse
 import json
+import unicodedata
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, 
                                QComboBox, QDateEdit, QHeaderView, QFrame, QTextEdit, QMessageBox, 
                                QListWidget, QListWidgetItem, QDialog, QScrollArea)
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor
+
+
+def normalizar_nome_pasta(valor):
+    """Remove caracteres invisíveis e espaços extras de nomes de pasta."""
+    texto = "".join(
+        caractere for caractere in str(valor or "")
+        if unicodedata.category(caractere) != "Cf"
+    )
+    texto = " ".join(texto.split())
+    return texto if any(caractere.isalnum() for caractere in texto) else ""
+
 
 class VisualizarFichaHistoricoDialog(QDialog):
     """Janela pop-up para ler uma ficha clínica antiga do histórico"""
@@ -183,12 +195,12 @@ class PacientesScreen(QWidget):
         """)
         self.combo_filtro_pasta.currentTextChanged.connect(self.filtrar_pacientes)
         filter_layout.addWidget(self.combo_filtro_pasta)
-        
+
         left_layout.addLayout(filter_layout)
         
         self.tabela = QTableWidget()
-        self.tabela.setColumnCount(5)
-        self.tabela.setHorizontalHeaderLabels(["ID", "Nome", "Telefone", "Convênio", "Pasta"])
+        self.tabela.setColumnCount(6)
+        self.tabela.setHorizontalHeaderLabels(["ID", "Nome", "Telefone", "Convênio", "Pasta", ""])
         self.tabela.verticalHeader().setVisible(False)
         self.tabela.setSelectionBehavior(QTableWidget.SelectRows)
         self.tabela.setSelectionMode(QTableWidget.SingleSelection)
@@ -218,8 +230,12 @@ class PacientesScreen(QWidget):
             }
         """)
         
-        self.tabela.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.tabela.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        cabecalho = self.tabela.horizontalHeader()
+        cabecalho.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for coluna in range(1, 5):
+            cabecalho.setSectionResizeMode(coluna, QHeaderView.Stretch)
+        cabecalho.setSectionResizeMode(5, QHeaderView.Fixed)
+        self.tabela.setColumnWidth(5, 46)
         self.tabela.itemSelectionChanged.connect(self.carregar_paciente_selecionado)
         left_layout.addWidget(self.tabela)
         
@@ -527,6 +543,7 @@ class PacientesScreen(QWidget):
         """
         self.input_sexo.setStyleSheet(self.input_sexo.styleSheet() + combobox_dropdown_style)
         self.input_pasta.setStyleSheet(self.input_pasta.styleSheet() + combobox_dropdown_style)
+        self.combo_filtro_pasta.setStyleSheet(self.combo_filtro_pasta.styleSheet() + combobox_dropdown_style)
         
         main_layout.addWidget(self.right_container)
         self.carregar_pacientes_tabela()
@@ -608,6 +625,32 @@ class PacientesScreen(QWidget):
                         item.setFont(font)
 
                 self.tabela.setItem(row_idx, col_idx, item)
+
+            paciente_id = row_data[0]
+            nome_paciente = str(row_data[1] or "")
+            btn_excluir_linha = QPushButton("×")
+            btn_excluir_linha.setToolTip(f"Excluir {nome_paciente}")
+            btn_excluir_linha.setFixedSize(30, 30)
+            btn_excluir_linha.setStyleSheet("""
+                QPushButton {
+                    color: #dc2626;
+                    background-color: #fef2f2;
+                    border: 1px solid #fecaca;
+                    border-radius: 6px;
+                    font-size: 20px;
+                    font-weight: bold;
+                }
+                QPushButton:hover { background-color: #fee2e2; border-color: #f87171; }
+            """)
+            btn_excluir_linha.clicked.connect(
+                lambda _, pid=paciente_id, nome=nome_paciente: self.excluir_paciente_por_id(pid, nome)
+            )
+            celula_exclusao = QWidget()
+            layout_celula = QHBoxLayout(celula_exclusao)
+            layout_celula.setContentsMargins(0, 0, 0, 0)
+            layout_celula.addWidget(btn_excluir_linha, alignment=Qt.AlignmentFlag.AlignCenter)
+            self.tabela.setCellWidget(row_idx, 5, celula_exclusao)
+            self.tabela.setRowHeight(row_idx, 38)
 
     def carregar_paciente_selecionado(self):
         item_selecionado = self.tabela.selectedItems()
@@ -842,8 +885,11 @@ class PacientesScreen(QWidget):
     def excluir_paciente(self):
         if self.id_em_edicao == -1:
             return
-            
-        nome_paciente = self.input_nome.text()
+
+        self.excluir_paciente_por_id(self.id_em_edicao, self.input_nome.text())
+
+    def excluir_paciente_por_id(self, paciente_id, nome_paciente):
+        """Confirma e executa a exclusão lógica de um paciente."""
         
         msg = QMessageBox(self)
         msg.setWindowTitle("Confirmar Exclusão")
@@ -862,8 +908,9 @@ class PacientesScreen(QWidget):
             if not self.db.supabase:
                 return
             try:
-                if self.db.soft_delete_paciente(self.id_em_edicao):
-                    self.limpar_formulario()
+                if self.db.soft_delete_paciente(paciente_id):
+                    if self.id_em_edicao == paciente_id:
+                        self.limpar_formulario()
                     self.carregar_pacientes_tabela()
                     self.mostrar_alerta_seguro("success", "Excluído", "O registro foi marcado como excluído (exclusão lógica).")
                 else:
@@ -923,10 +970,13 @@ class PacientesScreen(QWidget):
         # Filtra nomes vazios/só-espaço, que apareciam como um item "fantasma"
         # (ícone sem texto) no dropdown caso alguma pasta tivesse sido salva
         # com nome em branco em algum momento.
+        nomes_adicionados = set()
         for p in lista_pastas:
-            nome_limpo = (p or "").strip()
-            if not nome_limpo:
+            nome_limpo = normalizar_nome_pasta(p)
+            chave_nome = nome_limpo.casefold()
+            if not nome_limpo or chave_nome in nomes_adicionados:
                 continue
+            nomes_adicionados.add(chave_nome)
             self.combo_filtro_pasta.addItem(nome_limpo)
             self.input_pasta.addItem(nome_limpo)
             

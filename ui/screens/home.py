@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QInputDialog, QMessageBox, QTableWidgetItem, QColorDialog)
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor
+from ui.screens.pacientes import normalizar_nome_pasta
 class HomeScreen(QWidget):
     def __init__(self, window_principal, on_novo_paciente_click=None, on_pasta_click=None):
         super().__init__()
@@ -175,6 +176,7 @@ class HomeScreen(QWidget):
                 child.widget().deleteLater()
                 
         lista_pastas = getattr(self.window_principal, 'pastas_sistema', ["Geral"])
+        lista_pastas = [normalizar_nome_pasta(p) for p in lista_pastas if normalizar_nome_pasta(p)]
         cores_pastas = getattr(self.window_principal, 'pastas_cores', {})
         pacientes = self._buscar_pacientes_para_home()
         
@@ -352,7 +354,10 @@ class HomeScreen(QWidget):
         nome_nova = dialog.textValue()
         
         if ok and nome_nova.strip():
-            nome_limpo = nome_nova.strip()
+            nome_limpo = normalizar_nome_pasta(nome_nova)
+            if not nome_limpo:
+                self.mostrar_alerta_seguro("warning", "Nome inválido", "Digite um nome de pasta válido.")
+                return
             lista = list(getattr(self.window_principal, 'pastas_sistema', ["Geral"]))
             
             if nome_limpo in lista:
@@ -384,7 +389,10 @@ class HomeScreen(QWidget):
         nome_novo = dialog.textValue()
         
         if ok and nome_novo.strip():
-            nome_limpo = nome_novo.strip()
+            nome_limpo = normalizar_nome_pasta(nome_novo)
+            if not nome_limpo:
+                self.mostrar_alerta_seguro("warning", "Nome inválido", "Digite um nome de pasta válido.")
+                return
             lista = list(getattr(self.window_principal, 'pastas_sistema', ["Geral"]))
             
             if nome_limpo in lista and nome_limpo != nome_antigo:
