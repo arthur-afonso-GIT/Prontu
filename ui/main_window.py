@@ -4,6 +4,7 @@ import time
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
                                QPushButton, QStackedWidget, QLabel, QFrame)
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QIcon, QPixmap
 
 from ui.screens.home import HomeScreen
 from ui.screens.pacientes import PacientesScreen
@@ -19,7 +20,10 @@ except ImportError:
 class MainWindow(QMainWindow):
     def __init__(self, database_instancia):
         super().__init__()
-        self.setWindowTitle("Prontu — Prontuário Médico Inteligente")
+        caminho_logo = os.path.join(os.path.dirname(__file__), "assets", "prontu_logo.png")
+        if os.path.exists(caminho_logo):
+            self.setWindowIcon(QIcon(caminho_logo))
+        self.setWindowTitle("Prontu — Gerenciamento Inteligente")
         self.resize(1200, 750)
         
         # Recebe a conexão única do Supabase ativada no main.py
@@ -73,9 +77,22 @@ class MainWindow(QMainWindow):
         sidebar_layout.setSpacing(8)
         
         # Logo / Título do App
-        logo_label = QLabel("🏥 Prontu")
-        logo_label.setStyleSheet("color: #ffffff; font-size: 22px; font-weight: bold; margin-bottom: 24px; padding-left: 8px;")
-        sidebar_layout.addWidget(logo_label)
+        logo_layout = QHBoxLayout()
+        logo_layout.setContentsMargins(4, 0, 0, 24)
+        logo_layout.setSpacing(10)
+        logo_icone = QLabel()
+        logo_icone.setFixedSize(48, 48)
+        if os.path.exists(caminho_logo):
+            logo_icone.setPixmap(QPixmap(caminho_logo).scaled(
+                48, 48, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ))
+        logo_layout.addWidget(logo_icone)
+        logo_label = QLabel("Prontu")
+        logo_label.setStyleSheet("color: #ffffff; font-size: 22px; font-weight: bold;")
+        logo_layout.addWidget(logo_label)
+        logo_layout.addStretch()
+        sidebar_layout.addLayout(logo_layout)
         
         # Botões de Navegação
         self.btn_home = QPushButton(" 🏠 Painel Principal")

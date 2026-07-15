@@ -15,14 +15,15 @@ class HomeScreen(QWidget):
         
         # Layout Principal
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(25, 25, 25, 25)
-        main_layout.setSpacing(25)
+        main_layout.setContentsMargins(26, 28, 26, 24)
+        main_layout.setSpacing(18)
         
         # --- 1. CABEÇALHO DINÂMICO ---
         header_layout = QHBoxLayout()
         welcome_vbox = QVBoxLayout()
+        welcome_vbox.setSpacing(5)
         
-        hoje_extenso = QDate.currentDate().toString("dd 'de' MMMM 'de' yyyy")
+        hoje_extenso = self._data_por_extenso()
         
         self.title = QLabel("Olá,")
         self.title.setStyleSheet("font-size: 24px; font-weight: bold; color: #0f172a;")
@@ -47,18 +48,19 @@ class HomeScreen(QWidget):
         
         # --- 2. CARDS DE INDICADORES ---
         metricas_layout = QHBoxLayout()
-        metricas_layout.setSpacing(20)
+        metricas_layout.setSpacing(16)
         
         self.card_pacientes = CardMetrica("Total de Pacientes", "0", "👤", "#e0f2fe", "#0369a1")
         self.card_consultas = CardMetrica("Consultas Hoje", "0", "📅", "#fef3c7", "#b45309")
         
         metricas_layout.addWidget(self.card_pacientes)
         metricas_layout.addWidget(self.card_consultas)
+        metricas_layout.addStretch()
         main_layout.addLayout(metricas_layout)
         
         # --- 3. SEÇÃO INFERIOR: SELETOR DE PASTAS ---
         pastas_section = QVBoxLayout()
-        pastas_section.setSpacing(12)
+        pastas_section.setSpacing(10)
         
         pastas_header = QHBoxLayout()
         lbl_pastas_titulo = QLabel("📁 Pastas Clínicas / Especialidades")
@@ -76,7 +78,7 @@ class HomeScreen(QWidget):
         pastas_section.addLayout(pastas_header)
         
         self.pastas_grid_layout = QHBoxLayout()
-        self.pastas_grid_layout.setSpacing(15)
+        self.pastas_grid_layout.setSpacing(12)
         self.pastas_grid_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
         
         pastas_section.addLayout(self.pastas_grid_layout)
@@ -84,10 +86,11 @@ class HomeScreen(QWidget):
         
         # --- 4. SEÇÃO DO PAINEL DE TAREFAS ---
         split_tables_layout = QHBoxLayout()
-        split_tables_layout.setSpacing(25)
+        split_tables_layout.setSpacing(20)
         
         # Coluna Agenda do Dia
         agenda_vbox = QVBoxLayout()
+        agenda_vbox.setSpacing(8)
         lbl_agenda_tit = QLabel("📋 Próximas Consultas (Hoje)")
         lbl_agenda_tit.setStyleSheet("font-size: 15px; font-weight: bold; color: #334155;")
         agenda_vbox.addWidget(lbl_agenda_tit)
@@ -97,7 +100,7 @@ class HomeScreen(QWidget):
         self.table_agenda_resumo.setHorizontalHeaderLabels(["Horário", "Paciente", "Status"])
         self.table_agenda_resumo.verticalHeader().setVisible(False)
         self.table_agenda_resumo.setShowGrid(False)
-        self.table_agenda_resumo.setFixedHeight(180)
+        self.table_agenda_resumo.setFixedHeight(210)
         self.table_agenda_resumo.setStyleSheet("""
             QTableWidget { background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 13px; color: #334155; }
             QTableWidget::item { border-bottom: 1px solid #f1f5f9; padding: 6px; }
@@ -112,6 +115,7 @@ class HomeScreen(QWidget):
         
         # Coluna Pacientes Recentes
         recentes_vbox = QVBoxLayout()
+        recentes_vbox.setSpacing(8)
         lbl_rec_tit = QLabel("⏱️ Pacientes Adicionados Recentemente")
         lbl_rec_tit.setStyleSheet("font-size: 15px; font-weight: bold; color: #334155;")
         recentes_vbox.addWidget(lbl_rec_tit)
@@ -121,7 +125,7 @@ class HomeScreen(QWidget):
         self.table_recentes.setHorizontalHeaderLabels(["Nome do Paciente", "Pasta / Grupo"])
         self.table_recentes.verticalHeader().setVisible(False)
         self.table_recentes.setShowGrid(False)
-        self.table_recentes.setFixedHeight(180)
+        self.table_recentes.setFixedHeight(210)
         self.table_recentes.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table_recentes.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table_recentes.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -145,7 +149,7 @@ class HomeScreen(QWidget):
 
     def atualizar_saudacao_dinamica(self):
         nome_medico = self.db.obter_nome_profissional()
-        hoje_extenso = QDate.currentDate().toString("dd 'de' MMMM 'de' yyyy")
+        hoje_extenso = self._data_por_extenso()
         
         if nome_medico:
             self.title.setText(f"Olá, {nome_medico}")
@@ -153,6 +157,16 @@ class HomeScreen(QWidget):
         else:
             self.title.setText("Olá,")
             self.subtitle.setText(f"Bem-vindo(a) de volta. Aqui está o resumo para hoje, {hoje_extenso}.")
+
+    @staticmethod
+    def _data_por_extenso():
+        """Retorna a data em português, independentemente do idioma do Windows."""
+        meses = (
+            "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+            "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+        )
+        hoje = QDate.currentDate()
+        return f"{hoje.day()} de {meses[hoje.month() - 1]} de {hoje.year()}"
 
     def renderizar_lista_pastas(self):
         while self.pastas_grid_layout.count():
@@ -432,11 +446,11 @@ class HomeScreen(QWidget):
 class CardMetrica(QFrame):
     def __init__(self, titulo, valor, icone, bg_cor, texto_cor):
         super().__init__()
-        self.setFixedSize(220, 90)
+        self.setFixedSize(250, 96)
         self.setStyleSheet("QFrame { background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; }")
         
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(15, 12, 15, 12)
+        layout.setContentsMargins(18, 14, 18, 14)
         
         vbox = QVBoxLayout()
         vbox.setSpacing(2)
