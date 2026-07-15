@@ -30,6 +30,18 @@ The product is built as a desktop-first experience and is intended to be deliver
 
 ## Screenshots
 
+### Dashboard
+
+![Prontu dashboard](docs/screenshots/dashboard.png)
+
+### Patient management
+
+![Prontu patient management](https://github.com/user-attachments/assets/bb5a25cb-3897-464d-a310-a28c8173e11d)
+
+### Clinical records
+
+![Prontu clinical records](docs/screenshots/clinical-records.png)
+
 ### Appointment scheduling
 
 ![Prontu appointment scheduling](docs/screenshots/appointment-scheduling.png)
