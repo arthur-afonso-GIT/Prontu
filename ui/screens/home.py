@@ -6,12 +6,13 @@ from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor
 from ui.screens.pacientes import normalizar_nome_pasta
 class HomeScreen(QWidget):
-    def __init__(self, window_principal, on_novo_paciente_click=None, on_pasta_click=None):
+    def __init__(self, window_principal, on_novo_paciente_click=None, on_pasta_click=None, on_agendar_retorno_click=None):
         super().__init__()
         
         self.window_principal = window_principal
         self.on_novo_paciente_click = on_novo_paciente_click
         self.on_pasta_click = on_pasta_click
+        self.on_agendar_retorno_click = on_agendar_retorno_click
         self.db = window_principal.db
         
         # Layout Principal
@@ -53,9 +54,11 @@ class HomeScreen(QWidget):
         
         self.card_pacientes = CardMetrica("Total de Pacientes", "0", "👤", "#e0f2fe", "#0369a1")
         self.card_consultas = CardMetrica("Consultas Hoje", "0", "📅", "#fef3c7", "#b45309")
+        self.card_retornos = CardMetrica("Retornos Pendentes", "0", "↩", "#fce7f3", "#be185d")
         
         metricas_layout.addWidget(self.card_pacientes)
         metricas_layout.addWidget(self.card_consultas)
+        metricas_layout.addWidget(self.card_retornos)
         metricas_layout.addStretch()
         main_layout.addLayout(metricas_layout)
         
@@ -113,6 +116,31 @@ class HomeScreen(QWidget):
         h_agenda.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         agenda_vbox.addWidget(self.table_agenda_resumo)
         split_tables_layout.addLayout(agenda_vbox, stretch=1)
+
+        # Coluna de retornos que precisam de agendamento
+        retornos_vbox = QVBoxLayout()
+        retornos_vbox.setSpacing(8)
+        lbl_retornos_tit = QLabel("↩ Retornos pendentes")
+        lbl_retornos_tit.setStyleSheet("font-size: 15px; font-weight: bold; color: #334155;")
+        retornos_vbox.addWidget(lbl_retornos_tit)
+        self.table_retornos = QTableWidget()
+        self.table_retornos.setColumnCount(3)
+        self.table_retornos.setHorizontalHeaderLabels(["Paciente", "Previsto", ""])
+        self.table_retornos.verticalHeader().setVisible(False)
+        self.table_retornos.setShowGrid(False)
+        self.table_retornos.setFixedHeight(210)
+        self.table_retornos.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table_retornos.setStyleSheet("""
+            QTableWidget { background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 12px; color: #334155; }
+            QTableWidget::item { border-bottom: 1px solid #f1f5f9; padding: 6px; }
+            QHeaderView::section { background-color: #f8fafc; font-weight: bold; color: #64748b; border: none; padding: 6px; border-bottom: 1px solid #e2e8f0; font-size: 11px; }
+        """)
+        h_retornos = self.table_retornos.horizontalHeader()
+        h_retornos.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        h_retornos.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        h_retornos.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        retornos_vbox.addWidget(self.table_retornos)
+        split_tables_layout.addLayout(retornos_vbox, stretch=1)
         
         # Coluna Pacientes Recentes
         recentes_vbox = QVBoxLayout()
@@ -314,8 +342,34 @@ class HomeScreen(QWidget):
                 self.table_agenda_resumo.setItem(r_idx, 0, QTableWidgetItem(str(item["horario"])))
                 self.table_agenda_resumo.setItem(r_idx, 1, QTableWidgetItem(str(item["paciente"]).upper()))
                 self.table_agenda_resumo.setItem(r_idx, 2, QTableWidgetItem(str(item["status"] if item["status"] else "Agendado")))
+
+            # 3. Retornos pendentes — dados clínicos ficam no prontuário, não no painel.
+            self.table_retornos.setRowCount(0)
+            retornos = self.db.listar_retornos_pendentes() if hasattr(self.db, "listar_retornos_pendentes") else []
+            self.card_retornos.set_valor(str(len(retornos)))
+            hoje = QDate.currentDate().toString("yyyy-MM-dd")
+            for linha, retorno in enumerate(retornos[:6]):
+                self.table_retornos.insertRow(linha)
+                self.table_retornos.setItem(linha, 0, QTableWidgetItem(str(retorno.get("paciente_nome", "Paciente")).upper()))
+                data_prevista = str(retorno.get("data_prevista") or "")
+                data_formatada = QDate.fromString(data_prevista, "yyyy-MM-dd")
+                texto_data = data_formatada.toString("dd/MM/yyyy") if data_formatada.isValid() else data_prevista
+                if data_prevista and data_prevista < hoje:
+                    texto_data += " · Atrasado"
+                item_data = QTableWidgetItem(texto_data)
+                if data_prevista and data_prevista < hoje:
+                    item_data.setForeground(QColor("#dc2626"))
+                self.table_retornos.setItem(linha, 1, item_data)
+                btn_agendar = QPushButton("Agendar")
+                btn_agendar.setStyleSheet("QPushButton { color: #0369a1; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 5px; padding: 4px 7px; font-weight: bold; font-size: 11px; } QPushButton:hover { background: #dbeafe; }")
+                btn_agendar.clicked.connect(lambda checked=False, r=retorno: self.agendar_retorno(r))
+                self.table_retornos.setCellWidget(linha, 2, btn_agendar)
         except Exception as e:
             print(f"Erro ao inicializar tabelas reais da home: {e}")
+
+    def agendar_retorno(self, retorno):
+        if self.on_agendar_retorno_click:
+            self.on_agendar_retorno_click(retorno)
 
     def mostrar_alerta_seguro(self, tipo, titulo, texto):
         """Exibe um QMessageBox com cores explícitas, evitando herdar o tema

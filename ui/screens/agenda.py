@@ -2,8 +2,9 @@ import json
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QComboBox, QFrame, 
                                QMessageBox, QCalendarWidget, QScrollArea,
-                               QHeaderView, QTableView)
+                               QHeaderView, QTableView, QCheckBox)
 from PySide6.QtCore import Qt, QDate, QTime, QDateTime, QPoint
+from utils.operacao_segura import mensagem_erro_usuario, registrar_falha
 
 class AgendaScreen(QWidget):
     STATUS_CONSULTA = [
@@ -14,6 +15,14 @@ class AgendaScreen(QWidget):
         "07:00", "07:30", "08:00", "08:30", "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
         "12:00", "12:30", "13:00", "13:30", "14:00", "14:30", "15:00", "15:30", "16:00", "16:30",
         "17:00", "17:30", "18:00", "18:30", "19:00"
+    ]
+    MESES_PT = [
+        "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+        "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+    ]
+    DIAS_SEMANA_PT = [
+        "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
+        "sexta-feira", "sábado", "domingo",
     ]
 
     def __init__(self, database_instancia):
@@ -27,6 +36,7 @@ class AgendaScreen(QWidget):
         self.data_visualizada = QDate.currentDate()
         self.lista_pacientes_disponiveis = []
         self.db_agendamentos = {}
+        self._retorno_em_agendamento = None
         
         self.carregar_agendamentos_db()
         
@@ -93,6 +103,52 @@ class AgendaScreen(QWidget):
         selector_layout.addStretch()
         selector_layout.addWidget(self.btn_next_day)
         left_layout.addWidget(self.date_selector_container)
+
+        self.resumo_container = QFrame()
+        self.resumo_container.setStyleSheet("""
+            QFrame { background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; }
+            QLabel#TituloResumo { color: #0f172a; font-size: 14px; font-weight: bold; border: none; }
+            QLabel#TextoResumo { color: #64748b; font-size: 12px; border: none; }
+        """)
+        resumo_layout = QHBoxLayout(self.resumo_container)
+        resumo_layout.setContentsMargins(14, 9, 14, 9)
+        resumo_layout.setSpacing(10)
+
+        texto_resumo = QVBoxLayout()
+        self.lbl_titulo_resumo = QLabel("Agenda do dia")
+        self.lbl_titulo_resumo.setObjectName("TituloResumo")
+        self.lbl_resumo_agenda = QLabel("")
+        self.lbl_resumo_agenda.setObjectName("TextoResumo")
+        texto_resumo.addWidget(self.lbl_titulo_resumo)
+        texto_resumo.addWidget(self.lbl_resumo_agenda)
+        resumo_layout.addLayout(texto_resumo)
+        resumo_layout.addStretch()
+
+        self.modo_visualizacao = QComboBox()
+        self.modo_visualizacao.addItem("Visão diária", "dia")
+        self.modo_visualizacao.addItem("Visão semanal", "semana")
+        self.modo_visualizacao.setToolTip("Alternar entre agenda diária e semanal")
+        self.modo_visualizacao.currentIndexChanged.connect(self.alterar_modo_visualizacao)
+        resumo_layout.addWidget(self.modo_visualizacao)
+
+        self.filtro_status = QComboBox()
+        self.filtro_status.addItem("Todos os status", "")
+        self.filtro_status.addItem("Agendadas", "Agendado")
+        self.filtro_status.addItem("Confirmadas", "Confirmado")
+        self.filtro_status.addItem("Em atendimento", "Atendimento")
+        self.filtro_status.addItem("Realizadas", "Realizada")
+        self.filtro_status.addItem("Canceladas ou faltas", "Cancelada|Faltou")
+        self.filtro_status.setToolTip("Filtrar consultas pelo status")
+        self.filtro_status.currentIndexChanged.connect(self.renderizar_timeline_calendario)
+        resumo_layout.addWidget(self.filtro_status)
+
+        self.chk_ocultar_disponiveis = QCheckBox("Ocultar horários disponíveis")
+        self.chk_ocultar_disponiveis.setStyleSheet(
+            "QCheckBox { color: #475569; font-size: 12px; border: none; }"
+        )
+        self.chk_ocultar_disponiveis.toggled.connect(self.renderizar_timeline_calendario)
+        resumo_layout.addWidget(self.chk_ocultar_disponiveis)
+        left_layout.addWidget(self.resumo_container)
         
         self.scroll_agenda = QScrollArea()
         self.scroll_agenda.setWidgetResizable(True)
@@ -188,6 +244,7 @@ class AgendaScreen(QWidget):
         
         self.atualizar_visualizacao_data()
         self.renderizar_timeline_calendario()
+        self._marcar_formulario_salvo()
 
     def carregar_lista_pacientes_combobox(self):
         """Busca em tempo real a listagem de nomes cadastrados no Supabase para sugestões."""
@@ -268,8 +325,8 @@ class AgendaScreen(QWidget):
                 tabela_agenda.insert(payload).execute()
             return True
         except Exception as e:
-            print(f"Erro ao salvar agendamento no Supabase: {e}")
-            self._ultimo_erro_agenda = str(e)
+            registrar_falha("salvar agendamento", e)
+            self._ultimo_erro_agenda = type(e).__name__
             return False
 
     def remover_agendamento_do_db(self, data, hora):
@@ -365,9 +422,19 @@ class AgendaScreen(QWidget):
             item = self.layout_timeline.takeAt(0)
             w = item.widget()
             if w: w.deleteLater()
+
+        if self.modo_visualizacao.currentData() == "semana":
+            self.renderizar_visao_semanal()
+            return
+
+        self.scroll_agenda.setWidgetResizable(True)
+        self.container_timeline.setMinimumWidth(0)
                 
         str_data = self.data_visualizada.toString("dd/MM/yyyy")
         agendamentos_do_dia = self.db_agendamentos.get(str_data, {})
+        self.atualizar_resumo_do_dia(agendamentos_do_dia)
+        filtro_status = self.filtro_status.currentData()
+        exibir_apenas_consultas = bool(filtro_status) or self.chk_ocultar_disponiveis.isChecked()
         
         todos_horarios = sorted(list(set(self.HORARIOS_GRADE + list(agendamentos_do_dia.keys()))))
         
@@ -387,6 +454,8 @@ class AgendaScreen(QWidget):
                 dados = agendamentos_do_dia[hora]
                 
                 if dados["tipo_bloco"] == "principal":
+                    if not self._status_corresponde_ao_filtro(dados.get("status", ""), filtro_status):
+                        continue
                     status_txt = dados["status"]
                     cor_borda = "#0284c7"
                     if "Confirmado" in status_txt or "Realizada" in status_txt: cor_borda = "#10b981"
@@ -453,6 +522,8 @@ class AgendaScreen(QWidget):
                     
                     bloco_layout.addWidget(card_info, stretch=1)
                 else:
+                    if filtro_status:
+                        continue
                     card_bloqueado = QFrame()
                     card_bloqueado.setStyleSheet("QFrame { background-color: #f1f5f9; border: 1px dashed #cbd5e1; border-left: 5px solid #cbd5e1; border-radius: 6px; }")
                     cb_layout = QHBoxLayout(card_bloqueado)
@@ -464,6 +535,8 @@ class AgendaScreen(QWidget):
                     
                     bloco_layout.addWidget(card_bloqueado, stretch=1)
             else:
+                if exibir_apenas_consultas:
+                    continue
                 lbl_vazio = QLabel("— Horário Disponível —")
                 lbl_vazio.setStyleSheet("color: #94a3b8; font-size: 13px; font-style: italic; background: transparent;")
                 bloco_layout.addWidget(lbl_vazio, stretch=1)
@@ -476,13 +549,123 @@ class AgendaScreen(QWidget):
             if hasattr(window, "atualizar_dados_home"):
                 window.atualizar_dados_home()
 
+    def _inicio_da_semana(self):
+        return self.data_visualizada.addDays(1 - self.data_visualizada.dayOfWeek())
+
+    @staticmethod
+    def _cor_do_status(status):
+        if "Confirmado" in status or "Realizada" in status:
+            return "#10b981"
+        if "Atendimento" in status:
+            return "#f59e0b"
+        if "Faltou" in status or "Cancelada" in status:
+            return "#ef4444"
+        return "#0284c7"
+
+    def renderizar_visao_semanal(self):
+        """Renderiza uma semana compacta e mantém o dia detalhado disponível."""
+        self.scroll_agenda.setWidgetResizable(False)
+        self.container_timeline.setMinimumWidth(1120)
+        self.layout_timeline.setContentsMargins(0, 0, 0, 0)
+        self.layout_timeline.setSpacing(0)
+
+        inicio = self._inicio_da_semana()
+        filtro_status = self.filtro_status.currentData()
+        consultas_semana = []
+
+        grade_semana = QFrame()
+        grade_semana.setStyleSheet("QFrame#GradeSemanal { background: transparent; }")
+        grade_semana.setObjectName("GradeSemanal")
+        layout_semana = QHBoxLayout(grade_semana)
+        layout_semana.setContentsMargins(0, 0, 0, 0)
+        layout_semana.setSpacing(10)
+
+        for deslocamento in range(7):
+            data = inicio.addDays(deslocamento)
+            chave_data = data.toString("dd/MM/yyyy")
+            consultas_dia = [
+                (hora, dados)
+                for hora, dados in self.db_agendamentos.get(chave_data, {}).items()
+                if dados.get("tipo_bloco") == "principal"
+                and self._status_corresponde_ao_filtro(dados.get("status", ""), filtro_status)
+            ]
+            consultas_dia.sort(key=lambda item: item[0])
+            consultas_semana.extend(dados for _, dados in consultas_dia)
+
+            coluna_dia = QFrame()
+            coluna_dia.setFixedWidth(150)
+            coluna_dia.setStyleSheet(
+                "QFrame { background: white; border: 1px solid #e2e8f0; border-radius: 8px; }"
+            )
+            layout_dia = QVBoxLayout(coluna_dia)
+            layout_dia.setContentsMargins(9, 9, 9, 9)
+            layout_dia.setSpacing(8)
+
+            nome_dia = self.DIAS_SEMANA_PT[data.dayOfWeek() - 1].capitalize()
+            titulo_dia = QPushButton(f"{nome_dia}\n{data.day():02d}/{data.month():02d}")
+            titulo_dia.setToolTip("Abrir agenda detalhada deste dia")
+            titulo_dia.setStyleSheet(
+                "QPushButton { color: #0f172a; background: #f8fafc; border: none; border-radius: 6px; "
+                "padding: 7px; font-size: 12px; font-weight: bold; } "
+                "QPushButton:hover { background: #e0f2fe; color: #0369a1; }"
+            )
+            titulo_dia.clicked.connect(lambda checked=False, d=QDate(data): self.abrir_dia_da_semana(d))
+            layout_dia.addWidget(titulo_dia)
+
+            if not consultas_dia:
+                vazio = QLabel("Sem consultas")
+                vazio.setWordWrap(True)
+                vazio.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+                vazio.setStyleSheet("color: #94a3b8; font-size: 11px; border: none; padding: 12px 4px;")
+                layout_dia.addWidget(vazio)
+            else:
+                for hora, dados in consultas_dia:
+                    cor = self._cor_do_status(dados.get("status", ""))
+                    card = QFrame()
+                    card.setStyleSheet(
+                        f"QFrame {{ background: #ffffff; border: 1px solid #e2e8f0; border-left: 4px solid {cor}; "
+                        "border-radius: 5px; }}"
+                    )
+                    layout_card = QVBoxLayout(card)
+                    layout_card.setContentsMargins(7, 6, 7, 6)
+                    layout_card.setSpacing(2)
+                    lbl_hora = QLabel(hora)
+                    lbl_hora.setStyleSheet(f"color: {cor}; font-size: 11px; font-weight: bold; border: none;")
+                    lbl_paciente = QLabel(dados.get("paciente", ""))
+                    lbl_paciente.setWordWrap(True)
+                    lbl_paciente.setStyleSheet("color: #0f172a; font-size: 12px; font-weight: bold; border: none;")
+                    lbl_procedimento = QLabel(dados.get("procedimento", ""))
+                    lbl_procedimento.setWordWrap(True)
+                    lbl_procedimento.setStyleSheet("color: #64748b; font-size: 10px; border: none;")
+                    layout_card.addWidget(lbl_hora)
+                    layout_card.addWidget(lbl_paciente)
+                    layout_card.addWidget(lbl_procedimento)
+                    layout_dia.addWidget(card)
+            layout_dia.addStretch()
+            layout_semana.addWidget(coluna_dia)
+
+        self.atualizar_resumo_do_periodo(consultas_semana, "Resumo da semana")
+        self.layout_timeline.addWidget(grade_semana)
+
+    def abrir_dia_da_semana(self, data):
+        self.data_visualizada = data
+        self.modo_visualizacao.setCurrentIndex(0)
+        self.atualizar_visualizacao_data()
+        self.renderizar_timeline_calendario()
+
+    def alterar_modo_visualizacao(self):
+        self.atualizar_visualizacao_data()
+        self.renderizar_timeline_calendario()
+
     def navegar_dia_anterior(self):
-        self.data_visualizada = self.data_visualizada.addDays(-1)
+        deslocamento = -7 if self.modo_visualizacao.currentData() == "semana" else -1
+        self.data_visualizada = self.data_visualizada.addDays(deslocamento)
         self.atualizar_visualizacao_data()
         self.renderizar_timeline_calendario()
 
     def navegar_proximo_dia(self):
-        self.data_visualizada = self.data_visualizada.addDays(1)
+        deslocamento = 7 if self.modo_visualizacao.currentData() == "semana" else 1
+        self.data_visualizada = self.data_visualizada.addDays(deslocamento)
         self.atualizar_visualizacao_data()
         self.renderizar_timeline_calendario()
 
@@ -492,7 +675,94 @@ class AgendaScreen(QWidget):
         self.renderizar_timeline_calendario()
 
     def atualizar_visualizacao_data(self):
-        self.btn_data_central.setText(self.data_visualizada.toString("dd 'de' MMMM 'de' yyyy"))
+        if self.modo_visualizacao.currentData() == "semana":
+            inicio = self._inicio_da_semana()
+            fim = inicio.addDays(6)
+            if inicio.month() == fim.month():
+                periodo = f"{inicio.day()} a {fim.day()} de {self.MESES_PT[inicio.month() - 1]}"
+            else:
+                periodo = (
+                    f"{inicio.day()} de {self.MESES_PT[inicio.month() - 1]} a "
+                    f"{fim.day()} de {self.MESES_PT[fim.month() - 1]}"
+                )
+            self.btn_data_central.setText(f"Semana: {periodo} de {fim.year()}")
+            return
+        mes = self.MESES_PT[self.data_visualizada.month() - 1]
+        dia_semana = self.DIAS_SEMANA_PT[self.data_visualizada.dayOfWeek() - 1]
+        self.btn_data_central.setText(
+            f"{self.data_visualizada.day()} de {mes} de {self.data_visualizada.year()} · {dia_semana}"
+        )
+
+    def _estado_formulario_atual(self):
+        return (
+            self.input_paciente.lineEdit().text(), self.input_hora.currentText(),
+            self.input_duracao.currentText(), self.input_procedimento.currentText(),
+            self.input_status.currentText(), self.input_obs.text(),
+        )
+
+    def _marcar_formulario_salvo(self):
+        self._estado_formulario_salvo = self._estado_formulario_atual()
+
+    def tem_alteracoes_nao_salvas(self):
+        return self._estado_formulario_atual() != getattr(self, "_estado_formulario_salvo", None)
+
+    def descartar_alteracoes_nao_salvas(self):
+        self.input_paciente.setEditText("")
+        self.input_hora.setCurrentText("08:00")
+        self.input_duracao.setCurrentIndex(1)
+        self.input_procedimento.setCurrentIndex(0)
+        self.input_status.setCurrentIndex(0)
+        self.input_obs.clear()
+        self._retorno_em_agendamento = None
+        self._marcar_formulario_salvo()
+
+    def cancelar_retorno_em_agendamento(self):
+        """Desvincula um retorno se o usuário sair da Agenda sem confirmar."""
+        self._retorno_em_agendamento = None
+
+    def preencher_agendamento_retorno(self, retorno):
+        """Preenche a Agenda a partir de um retorno pendente do Painel Principal."""
+        if not retorno:
+            return
+        data_prevista = QDate.fromString(str(retorno.get("data_prevista") or ""), "yyyy-MM-dd")
+        if data_prevista.isValid():
+            self.data_visualizada = data_prevista
+            self.atualizar_visualizacao_data()
+        self.carregar_lista_pacientes_combobox()
+        self.input_paciente.setEditText(str(retorno.get("paciente_nome") or ""))
+        indice_retorno = self.input_procedimento.findText("Retorno")
+        if indice_retorno >= 0:
+            self.input_procedimento.setCurrentIndex(indice_retorno)
+        motivo = str(retorno.get("motivo") or "").strip()
+        self.input_obs.setText(f"Retorno: {motivo}" if motivo else "Retorno programado")
+        self._retorno_em_agendamento = retorno
+        self.renderizar_timeline_calendario()
+        self._marcar_formulario_salvo()
+
+    @staticmethod
+    def _status_corresponde_ao_filtro(status, filtro):
+        if not filtro:
+            return True
+        return any(termo in status for termo in filtro.split("|"))
+
+    def atualizar_resumo_do_dia(self, agendamentos_do_dia):
+        """Mostra um resumo rápido sem fazer uma nova consulta ao Supabase."""
+        consultas = [
+            dados for dados in agendamentos_do_dia.values()
+            if dados.get("tipo_bloco") == "principal"
+        ]
+        self.atualizar_resumo_do_periodo(consultas, "Agenda do dia")
+
+    def atualizar_resumo_do_periodo(self, consultas, titulo):
+        self.lbl_titulo_resumo.setText(titulo)
+        total = len(consultas)
+        confirmadas = sum("Confirmado" in dados.get("status", "") for dados in consultas)
+        pendentes = sum("Agendado" in dados.get("status", "") for dados in consultas)
+        realizadas = sum("Realizada" in dados.get("status", "") for dados in consultas)
+        self.lbl_resumo_agenda.setText(
+            f"{total} consulta(s) · {confirmadas} confirmada(s) · "
+            f"{pendentes} pendente(s) · {realizadas} realizada(s)"
+        )
 
     def _paciente_do_slot(self, str_data, hora):
         dados = self.db_agendamentos[str_data][hora]
@@ -568,12 +838,11 @@ class AgendaScreen(QWidget):
         if not self.salvar_agendamento_no_db(str_data, hora_inicial_str, bloco_principal):
             del self.db_agendamentos[str_data][hora_inicial_str]
             self.input_paciente.blockSignals(False)
-            detalhe = getattr(self, "_ultimo_erro_agenda", "Motivo não informado pelo Supabase.")
             QMessageBox.critical(
                 self,
                 "Consulta não salva",
-                "Não foi possível salvar a consulta no Supabase. Ela não será mantida apenas na memória.\n\n"
-                f"Detalhe para correção: {detalhe}",
+                mensagem_erro_usuario("salvar a consulta") +
+                " A consulta não foi registrada e não ficará apenas na memória.",
             )
             return
         
@@ -590,10 +859,18 @@ class AgendaScreen(QWidget):
             }
             self.db_agendamentos[str_data][slot_sequencia] = bloco_continua
             self.salvar_agendamento_no_db(str_data, slot_sequencia, bloco_continua)
+
+        if self._retorno_em_agendamento and hasattr(self.db_gerenciador, "atualizar_status_retorno"):
+            retorno_atualizado = self.db_gerenciador.atualizar_status_retorno(
+                self._retorno_em_agendamento.get("id"), "Agendado"
+            )
+            if retorno_atualizado:
+                self._retorno_em_agendamento = None
         
         self.input_paciente.blockSignals(False)
         self.atualizar_lista_sugestoes(self.lista_pacientes_disponiveis)
         self.input_obs.clear()
+        self._marcar_formulario_salvo()
 
         ultimo_slot_ocupado = QTime.fromString(horarios_a_reservar[-1], "hh:mm")
         proximo_slot = ultimo_slot_ocupado.addSecs(30 * 60).toString("hh:mm")

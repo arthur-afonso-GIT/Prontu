@@ -1,13 +1,187 @@
 import os
+import json
+from datetime import datetime
 
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QFrame, QMessageBox,
                                QComboBox, QCheckBox, QFileDialog, QInputDialog,
-                               QSpinBox)
+                               QSpinBox, QDialog, QTableWidget, QTableWidgetItem,
+                               QHeaderView)
 from PySide6.QtCore import Qt
 
 from services.backup_service import BackupService
 from services.backup_worker import BackupWorker
+
+
+class HistoricoAuditoriaDialog(QDialog):
+    """Consulta apenas os metadados imutáveis do histórico do consultório."""
+
+    NOMES_ACAO = {
+        "INSERT": "Criado",
+        "UPDATE": "Atualizado",
+        "DELETE": "Excluído",
+        "BACKUP_CREATED": "Backup concluído",
+        "EXPORT": "Documento exportado",
+    }
+    NOMES_ENTIDADE = {
+        "pacientes": "Pacientes",
+        "agenda": "Agenda",
+        "fichas_preenchidas": "Fichas clínicas",
+        "modelos_fichas": "Modelos de ficha",
+        "pastas": "Pastas",
+        "configuracoes": "Configurações",
+        "pagamentos_consultas": "Financeiro",
+        "retornos_pacientes": "Retornos",
+        "backup": "Backup",
+    }
+    NOMES_CAMPOS = {
+        "nome": "Nome", "convenio": "Convênio", "pasta": "Pasta", "sexo": "Sexo",
+        "status": "Status", "procedimento": "Procedimento", "data": "Data",
+        "horario": "Horário", "duracao_txt": "Duração", "deleted_at": "Arquivamento",
+        "status_pagamento": "Status do pagamento", "valor": "Valor da consulta",
+        "valor_recebido": "Valor recebido", "forma_pagamento": "Forma de pagamento",
+        "data_prevista": "Data prevista do retorno",
+    }
+    CAMPOS_PRIVADOS = {
+        "id", "consultorio_id", "auth_user_id", "created_at", "updated_at", "criado_em",
+        "dados_respostas", "anexos", "queixa", "queixa_principal", "endereco", "telefone",
+        "nascimento", "cpf", "rg", "observacao", "valor_anterior", "valor_novo",
+    }
+
+    def __init__(self, database_instancia, parent=None):
+        super().__init__(parent)
+        self.db = database_instancia
+        self.eventos = []
+        self.setWindowTitle("Histórico de Auditoria")
+        self.resize(900, 560)
+        self.setStyleSheet("QDialog { background: #f8fafc; }")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 22, 22, 22)
+        layout.setSpacing(12)
+
+        titulo = QLabel("Histórico de Auditoria")
+        titulo.setStyleSheet("font-size: 20px; font-weight: bold; color: #0f172a;")
+        descricao = QLabel(
+            "Acompanhe ações importantes do consultório. Dados clínicos e conteúdos de fichas não são exibidos aqui."
+        )
+        descricao.setWordWrap(True)
+        descricao.setStyleSheet("font-size: 12px; color: #64748b;")
+        layout.addWidget(titulo)
+        layout.addWidget(descricao)
+
+        filtros = QHBoxLayout()
+        filtros.addWidget(QLabel("Mostrar:"))
+        self.combo_area = QComboBox()
+        self.combo_area.addItem("Todas as áreas", "")
+        for texto, valor in [
+            ("Pacientes", "pacientes"), ("Agenda", "agenda"),
+            ("Fichas clínicas", "fichas_preenchidas"), ("Financeiro", "pagamentos_consultas"),
+            ("Retornos", "retornos_pacientes"), ("Configurações", "configuracoes"), ("Backup", "backup"),
+        ]:
+            self.combo_area.addItem(texto, valor)
+        self.combo_area.currentIndexChanged.connect(self.renderizar_eventos)
+        filtros.addWidget(self.combo_area)
+        filtros.addStretch()
+        btn_atualizar = QPushButton("Atualizar")
+        btn_atualizar.clicked.connect(self.carregar_eventos)
+        filtros.addWidget(btn_atualizar)
+        layout.addLayout(filtros)
+
+        self.tabela = QTableWidget()
+        self.tabela.setColumnCount(4)
+        self.tabela.setHorizontalHeaderLabels(["Data e hora", "Ação", "Área", "O que mudou"])
+        self.tabela.verticalHeader().setVisible(False)
+        self.tabela.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tabela.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.tabela.setStyleSheet(
+            "QTableWidget { background: white; color: #334155; border: 1px solid #e2e8f0; border-radius: 8px; } "
+            "QTableWidget::item { padding: 8px; } "
+            "QHeaderView::section { background: #f1f5f9; color: #475569; border: none; "
+            "border-bottom: 1px solid #e2e8f0; padding: 8px; font-weight: bold; }"
+        )
+        cabecalho = self.tabela.horizontalHeader()
+        cabecalho.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        cabecalho.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        cabecalho.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        cabecalho.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.tabela)
+
+        self.lbl_status = QLabel("")
+        self.lbl_status.setStyleSheet("color: #64748b; font-size: 12px;")
+        layout.addWidget(self.lbl_status)
+        self.carregar_eventos()
+
+    def carregar_eventos(self):
+        self.eventos = self.db.listar_eventos_auditoria() if self.db else []
+        self.renderizar_eventos()
+
+    @staticmethod
+    def _formatar_data(valor):
+        try:
+            data = datetime.fromisoformat(str(valor).replace("Z", "+00:00"))
+            return data.astimezone().strftime("%d/%m/%Y %H:%M")
+        except (TypeError, ValueError):
+            return str(valor or "Não informado")
+
+    def renderizar_eventos(self):
+        area = self.combo_area.currentData()
+        eventos = [evento for evento in self.eventos if not area or evento.get("entidade") == area]
+        self.tabela.setRowCount(0)
+        for linha, evento in enumerate(eventos):
+            self.tabela.insertRow(linha)
+            acao = self.NOMES_ACAO.get(evento.get("acao"), str(evento.get("acao") or "Ação registrada"))
+            entidade = evento.get("entidade") or ""
+            area_nome = self.NOMES_ENTIDADE.get(entidade, entidade.replace("_", " ").capitalize())
+            valores = [
+                self._formatar_data(evento.get("criado_em")), acao, area_nome,
+                self._resumir_alteracao(evento),
+            ]
+            for coluna, valor in enumerate(valores):
+                self.tabela.setItem(linha, coluna, QTableWidgetItem(valor))
+
+        self.lbl_status.setText(
+            f"{len(eventos)} evento(s) exibido(s). O histórico é somente leitura."
+        )
+
+    @staticmethod
+    def _como_dicionario(valor):
+        if isinstance(valor, dict):
+            return valor
+        if isinstance(valor, str):
+            try:
+                return json.loads(valor)
+            except json.JSONDecodeError:
+                return {}
+        return {}
+
+    def _resumir_alteracao(self, evento):
+        """Cria um resumo legível sem expor valores clínicos ou dados pessoais."""
+        acao = evento.get("acao") or ""
+        entidade = evento.get("entidade") or ""
+        contexto = self._como_dicionario(evento.get("contexto"))
+
+        if entidade == "pagamentos_consultas" and contexto.get("status_pagamento"):
+            return f"Status do pagamento: {contexto['status_pagamento']}"
+        if acao == "INSERT":
+            return "Novo registro adicionado"
+        if acao == "DELETE":
+            return "Registro removido"
+
+        anterior = self._como_dicionario(evento.get("valor_anterior"))
+        novo = self._como_dicionario(evento.get("valor_novo"))
+        campos = []
+        for campo in set(anterior) | set(novo):
+            if campo in self.CAMPOS_PRIVADOS or anterior.get(campo) == novo.get(campo):
+                continue
+            campos.append(self.NOMES_CAMPOS.get(campo, campo.replace("_", " ").capitalize()))
+
+        if "Arquivamento" in campos:
+            return "Registro arquivado"
+        if campos:
+            return "Alterado: " + ", ".join(sorted(campos)[:4])
+        referencia = evento.get("registro_id")
+        return f"Registro #{referencia} atualizado" if referencia else "Registro atualizado"
 
 
 class ConfiguracoesScreen(QWidget):
@@ -60,6 +234,14 @@ class ConfiguracoesScreen(QWidget):
         
         # Layout inferior para botões de ação
         btn_layout = QHBoxLayout()
+        self.btn_auditoria = QPushButton("Histórico de Auditoria")
+        self.btn_auditoria.setStyleSheet(
+            "QPushButton { background-color: #eff6ff; color: #0369a1; border: 1px solid #93c5fd; "
+            "padding: 10px 16px; font-weight: bold; border-radius: 6px; font-size: 13px; } "
+            "QPushButton:hover { background-color: #dbeafe; }"
+        )
+        self.btn_auditoria.clicked.connect(self.abrir_historico_auditoria)
+        btn_layout.addWidget(self.btn_auditoria)
         btn_layout.addStretch()
         
         self.btn_salvar = QPushButton("💾 Salvar Alterações")
@@ -173,6 +355,15 @@ class ConfiguracoesScreen(QWidget):
 
     def _abrir_seletor_pasta_backup(self, event):
         self._escolher_pasta_backup()
+
+    def abrir_historico_auditoria(self):
+        if not self.db or not self.db.supabase:
+            QMessageBox.warning(
+                self, "Histórico indisponível",
+                "Não há uma conexão segura ativa para consultar o histórico agora."
+            )
+            return
+        HistoricoAuditoriaDialog(self.db, self).exec()
 
     def _escolher_pasta_backup(self):
         pasta_atual = self.input_backup_dir.text().strip() or self._pasta_backup_padrao

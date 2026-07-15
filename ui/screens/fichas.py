@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PySide6.QtGui import QPixmap, QDesktopServices, QColor, QDoubleValidator, QTextDocument
 from PySide6.QtCore import Qt, QUrl, QDate
 from PySide6.QtPrintSupport import QPrinter
+from utils.operacao_segura import mensagem_erro_usuario, registrar_falha
 
 try:
     from docx import Document
@@ -856,7 +857,8 @@ class FichasScreen(QWidget):
             
             self.exibir_popup("info", "Sucesso!", f"O modelo '{nome_modelo}' foi gravado no banco de dados e já está pronto para uso!")
         except Exception as e:
-            self.exibir_popup("erro", "Erro ao Salvar", f"Falha ao gravar no banco:\n{str(e)}")
+            registrar_falha("salvar modelo de ficha", e)
+            self.exibir_popup("erro", "Erro ao salvar", mensagem_erro_usuario("salvar o modelo de ficha"))
 
     def _detectar_campos_a_partir_de_linhas(self, linhas_texto):
         """Heurística compartilhada: recebe uma lista de linhas de texto (extraídas
@@ -987,7 +989,8 @@ class FichasScreen(QWidget):
             novos_campos = self._detectar_campos_melhorado(linhas_texto)
             self._aplicar_modelo_importado(novos_campos, file_path)
         except Exception as e:
-            self.exibir_popup("erro", "Falha de Leitura", f"Erro:\n{str(e)}")
+            registrar_falha("ler documento", e)
+            self.exibir_popup("erro", "Falha de leitura", "Não foi possível ler este documento. Verifique se o arquivo está íntegro e tente novamente.")
 
     def importar_modelo_pdf(self):
         """Lê um PDF (anamnese, relatório, exame estruturado) e tenta montar
@@ -1020,7 +1023,8 @@ class FichasScreen(QWidget):
             novos_campos = self._detectar_campos_melhorado(linhas_texto)
             self._aplicar_modelo_importado(novos_campos, file_path)
         except Exception as e:
-            self.exibir_popup("erro", "Falha de Leitura", f"Erro ao ler o PDF:\n{str(e)}")
+            registrar_falha("ler PDF", e)
+            self.exibir_popup("erro", "Falha de leitura", "Não foi possível ler este PDF. Verifique o arquivo e tente novamente.")
 
     # ============================================================
     # ANEXOS (fotos / PDFs vinculados à ficha preenchida atual)
@@ -1199,6 +1203,7 @@ class FichasScreen(QWidget):
             self.btn_salvar_atendimento.setText("Salvar alterações da ficha")
             self.btn_cancelar_edicao.setVisible(True)
             self.lbl_status_operacao.setText("Editando ficha existente. O paciente e o modelo foram preservados.")
+            self._formulario_sujo = False
             return True
         except Exception as e:
             print(f"Erro ao abrir ficha para edição: {e}")
@@ -1244,6 +1249,7 @@ class FichasScreen(QWidget):
         self.btn_cancelar_edicao.setVisible(False)
         self.lbl_status_operacao.setText("Edição cancelada. Você pode iniciar uma nova ficha.")
         self.gerar_modelo_padrao()
+        self._formulario_sujo = False
 
     def renderizar_formulario_dinamico(self):
         self.limpar_layout_completamente(self.dinamic_form_layout)
@@ -1281,6 +1287,7 @@ class FichasScreen(QWidget):
                 self.dinamic_form_layout.addWidget(lbl)
                 self.dinamic_form_layout.addWidget(inp)
                 self.widgets_dinamicos[id_campo] = ("texto_curto", inp)
+                inp.textChanged.connect(self._marcar_formulario_sujo)
                 
             elif tipo == "texto_longo":
                 lbl = QLabel(label)
@@ -1292,12 +1299,14 @@ class FichasScreen(QWidget):
                 self.dinamic_form_layout.addWidget(lbl)
                 self.dinamic_form_layout.addWidget(inp)
                 self.widgets_dinamicos[id_campo] = ("texto_longo", inp)
+                inp.textChanged.connect(self._marcar_formulario_sujo)
                 
             elif tipo == "checkbox":
                 chk = QCheckBox(label)
                 chk.setStyleSheet("QCheckBox { color: #0f172a !important; font-size: 13px; font-weight: 500; padding: 4px; background-color: transparent; }")
                 self.dinamic_form_layout.addWidget(chk)
                 self.widgets_dinamicos[id_campo] = ("checkbox", chk)
+                chk.toggled.connect(self._marcar_formulario_sujo)
 
             elif tipo == "numero":
                 unidade = campo.get("unidade", "")
@@ -1310,6 +1319,7 @@ class FichasScreen(QWidget):
                 self.dinamic_form_layout.addWidget(lbl)
                 self.dinamic_form_layout.addWidget(inp)
                 self.widgets_dinamicos[id_campo] = ("numero", inp)
+                inp.textChanged.connect(self._marcar_formulario_sujo)
 
             elif tipo == "data":
                 lbl = QLabel(label)
@@ -1322,6 +1332,7 @@ class FichasScreen(QWidget):
                 self.dinamic_form_layout.addWidget(lbl)
                 self.dinamic_form_layout.addWidget(inp)
                 self.widgets_dinamicos[id_campo] = ("data", inp)
+                inp.dateChanged.connect(self._marcar_formulario_sujo)
 
             elif tipo == "multipla_escolha":
                 lbl = QLabel(label)
@@ -1334,9 +1345,25 @@ class FichasScreen(QWidget):
                     grupo_radio.addButton(radio)
                     self.dinamic_form_layout.addWidget(radio)
                 self.widgets_dinamicos[id_campo] = ("multipla_escolha", grupo_radio)
+                grupo_radio.buttonToggled.connect(
+                    lambda _, marcado: self._marcar_formulario_sujo() if marcado else None
+                )
 
         self.dinamic_form_layout.addStretch()
         self.scroll_content.adjustSize()
+
+    def _marcar_formulario_sujo(self, *_):
+        self._formulario_sujo = True
+
+    def tem_alteracoes_nao_salvas(self):
+        return self._formulario_sujo
+
+    def descartar_alteracoes_nao_salvas(self):
+        if self.ficha_em_edicao_id is not None:
+            self.cancelar_edicao_ficha()
+        else:
+            self.gerar_modelo_padrao()
+        self._formulario_sujo = False
 
     def _dados_para_exportacao(self):
         paciente = self.combo_paciente.currentText().strip()
@@ -1554,4 +1581,5 @@ class FichasScreen(QWidget):
             else:
                 self.exibir_popup("info", "Ficha Salva", "O atendimento foi registrado com sucesso!")
         except Exception as e:
-            self.exibir_popup("erro", "Erro", f"Falha no banco de dados:\n{str(e)}")
+            registrar_falha("salvar ficha preenchida", e)
+            self.exibir_popup("erro", "Ficha não salva", mensagem_erro_usuario("salvar a ficha"))

@@ -7,6 +7,12 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QLineEdit, QComboBox, QPushButton,
     QMessageBox,
 )
+from utils.operacao_segura import (
+    finalizar_operacao,
+    iniciar_operacao,
+    mensagem_erro_usuario,
+    registrar_falha,
+)
 
 
 class FinanceiroScreen(QWidget):
@@ -230,12 +236,17 @@ class FinanceiroScreen(QWidget):
         self.input_observacao.setText(registro.get("observacao") or "")
 
     def salvar_pagamento(self):
+        if not iniciar_operacao(self.btn_salvar, "Salvando pagamento..."):
+            return
+
         if not self.registro_selecionado:
+            finalizar_operacao(self.btn_salvar)
             QMessageBox.warning(self, "Selecione uma consulta", "Selecione uma consulta realizada na tabela primeiro.")
             return
         valor = self._numero(self.input_valor.text())
         recebido = self._numero(self.input_recebido.text())
         if valor is None or recebido is None or valor < 0 or recebido < 0:
+            finalizar_operacao(self.btn_salvar)
             QMessageBox.warning(self, "Valor inválido", "Informe valores válidos, por exemplo: 150,00.")
             return
         try:
@@ -251,9 +262,21 @@ class FinanceiroScreen(QWidget):
             existente = tabela.select("id").eq("consultorio_id", cid).eq("agenda_data", registro["agenda_data"]).eq("agenda_horario", registro["agenda_horario"]).execute()
             if existente.data:
                 tabela.update(payload).eq("id", existente.data[0]["id"]).execute()
+                acao_auditoria = "UPDATE"
             else:
                 tabela.insert(payload).execute()
+                acao_auditoria = "INSERT"
+            if hasattr(self.db, "registrar_evento_auditoria"):
+                self.db.registrar_evento_auditoria(
+                    acao_auditoria,
+                    "pagamentos_consultas",
+                    f"{registro['agenda_data']}:{registro['agenda_horario']}",
+                    {"status_pagamento": self.combo_status.currentText()},
+                )
             self.carregar_dados()
             self.lbl_status.setText("Pagamento salvo com sucesso.")
         except Exception as e:
-            QMessageBox.critical(self, "Pagamento não salvo", f"Não foi possível salvar o pagamento.\n\nDetalhe: {e}")
+            registrar_falha("salvar pagamento", e)
+            QMessageBox.critical(self, "Pagamento não salvo", mensagem_erro_usuario("salvar o pagamento"))
+        finally:
+            finalizar_operacao(self.btn_salvar)

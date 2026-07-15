@@ -227,6 +227,113 @@ class Database:
         except Exception as exc:
             print(f"Aviso: falha ao registrar auditoria ({acao}/{entidade}): {exc}")
 
+    def listar_eventos_auditoria(self, limite: int = 300) -> list[dict]:
+        """Retorna metadados de auditoria do consultório, sem valores clínicos."""
+        if not self.supabase or self.consultorio_id is None:
+            return []
+        try:
+            resposta = (
+                self.supabase.table("audit_logs")
+                .select(
+                    "id, acao, entidade, registro_id, contexto, "
+                    "valor_anterior, valor_novo, criado_em"
+                )
+                .eq("consultorio_id", self.consultorio_id)
+                .order("criado_em", desc=True)
+                .limit(limite)
+                .execute()
+            )
+            return resposta.data or []
+        except Exception as exc:
+            print(f"Aviso: falha ao listar auditoria ({type(exc).__name__}).")
+            return []
+
+    def criar_retorno(self, paciente_id: int, data_prevista: str, motivo: str = "") -> bool:
+        if not self.supabase or self.consultorio_id is None:
+            return False
+        try:
+            self.supabase.table("retornos_pacientes").insert({
+                "consultorio_id": self.consultorio_id,
+                "paciente_id": paciente_id,
+                "data_prevista": data_prevista,
+                "motivo": motivo.strip(),
+                "status": "Pendente",
+            }).execute()
+            self.registrar_evento_auditoria(
+                "INSERT", "retornos_pacientes", paciente_id,
+                {"data_prevista": data_prevista},
+            )
+            return True
+        except Exception as exc:
+            print(f"Aviso: falha ao criar retorno ({type(exc).__name__}).")
+            return False
+
+    def listar_retornos_pendentes(self, limite: int = 100) -> list[dict]:
+        if not self.supabase or self.consultorio_id is None:
+            return []
+        try:
+            resposta = (
+                self.supabase.table("retornos_pacientes")
+                .select("id, paciente_id, data_prevista, motivo, status")
+                .eq("consultorio_id", self.consultorio_id)
+                .eq("status", "Pendente")
+                .order("data_prevista")
+                .limit(limite)
+                .execute()
+            )
+            retornos = resposta.data or []
+            ids = list({item.get("paciente_id") for item in retornos if item.get("paciente_id") is not None})
+            if not ids:
+                return retornos
+            pacientes = (
+                self.supabase.table("pacientes")
+                .select("id, nome")
+                .eq("consultorio_id", self.consultorio_id)
+                .in_("id", ids)
+                .is_("deleted_at", "null")
+                .execute()
+            )
+            nomes = {item["id"]: item.get("nome", "Paciente") for item in (pacientes.data or [])}
+            for retorno in retornos:
+                retorno["paciente_nome"] = nomes.get(retorno.get("paciente_id"), "Paciente indisponível")
+            return retornos
+        except Exception as exc:
+            print(f"Aviso: falha ao listar retornos ({type(exc).__name__}).")
+            return []
+
+    def listar_retornos_paciente(self, paciente_id: int) -> list[dict]:
+        """Retorna o histórico de retornos de um paciente do consultório atual."""
+        if not self.supabase or self.consultorio_id is None or not paciente_id:
+            return []
+        try:
+            resposta = (
+                self.supabase.table("retornos_pacientes")
+                .select("id, data_prevista, motivo, status, criado_em")
+                .eq("consultorio_id", self.consultorio_id)
+                .eq("paciente_id", paciente_id)
+                .order("data_prevista", desc=True)
+                .execute()
+            )
+            return resposta.data or []
+        except Exception as exc:
+            print(f"Aviso: falha ao listar retornos do paciente ({type(exc).__name__}).")
+            return []
+
+    def atualizar_status_retorno(self, retorno_id: int, status: str) -> bool:
+        if not self.supabase or self.consultorio_id is None:
+            return False
+        if status not in {"Pendente", "Agendado", "Concluído", "Não retornou", "Cancelado"}:
+            return False
+        try:
+            self.supabase.table("retornos_pacientes").update({"status": status}).eq(
+                "id", retorno_id
+            ).eq("consultorio_id", self.consultorio_id).execute()
+            self.registrar_evento_auditoria("UPDATE", "retornos_pacientes", retorno_id, {"status": status})
+            return True
+        except Exception as exc:
+            print(f"Aviso: falha ao atualizar retorno ({type(exc).__name__}).")
+            return False
+
     # --- FUNÇÕES DE CONFIGURAÇÃO ---
     def obter_nome_profissional(self):
         if not self.supabase or self.consultorio_id is None:

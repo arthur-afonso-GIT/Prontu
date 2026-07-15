@@ -5,9 +5,15 @@ import unicodedata
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, 
                                QComboBox, QDateEdit, QHeaderView, QFrame, QTextEdit, QMessageBox, 
-                               QListWidget, QListWidgetItem, QDialog, QScrollArea)
+                               QListWidget, QListWidgetItem, QDialog, QScrollArea, QCalendarWidget)
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor
+from utils.operacao_segura import (
+    finalizar_operacao,
+    iniciar_operacao,
+    mensagem_erro_usuario,
+    registrar_falha,
+)
 
 
 def normalizar_nome_pasta(valor):
@@ -475,6 +481,39 @@ class PacientesScreen(QWidget):
         self.btn_excluir_ficha.clicked.connect(self.excluir_ficha_historico_selecionada)
         acoes_historico.addWidget(self.btn_excluir_ficha)
         right_layout.addLayout(acoes_historico)
+
+        self.lbl_retornos = QLabel("↩ Retornos do paciente:")
+        self.lbl_retornos.setStyleSheet("color: #334155; font-weight: bold; margin-top: 4px;")
+        right_layout.addWidget(self.lbl_retornos)
+        self.list_retornos = QListWidget()
+        self.list_retornos.setFixedHeight(78)
+        self.list_retornos.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.list_retornos.setStyleSheet("""
+            QListWidget { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; color: #0f172a; }
+            QListWidget::item { padding: 5px 7px; border-bottom: 1px solid #e2e8f0; }
+            QListWidget::item:selected { background: #dbeafe; color: #0f172a; }
+        """)
+        right_layout.addWidget(self.list_retornos)
+
+        acoes_retornos = QHBoxLayout()
+        acoes_retornos.setSpacing(5)
+        self.btn_agendar_retorno = QPushButton("Agendar")
+        self.btn_agendar_retorno.setStyleSheet("QPushButton { background: #eff6ff; color: #0369a1; border: 1px solid #93c5fd; border-radius: 5px; padding: 5px; font-weight: bold; } QPushButton:hover { background: #dbeafe; }")
+        self.btn_agendar_retorno.clicked.connect(self.agendar_retorno_selecionado)
+        acoes_retornos.addWidget(self.btn_agendar_retorno)
+        self.btn_concluir_retorno = QPushButton("Concluir")
+        self.btn_concluir_retorno.setStyleSheet("QPushButton { background: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; border-radius: 5px; padding: 5px; font-weight: bold; } QPushButton:hover { background: #d1fae5; }")
+        self.btn_concluir_retorno.clicked.connect(lambda: self.alterar_status_retorno_selecionado("Concluído"))
+        acoes_retornos.addWidget(self.btn_concluir_retorno)
+        self.btn_nao_retorno = QPushButton("Não retornou")
+        self.btn_nao_retorno.setStyleSheet("QPushButton { background: #fff7ed; color: #c2410c; border: 1px solid #fdba74; border-radius: 5px; padding: 5px; font-weight: bold; } QPushButton:hover { background: #ffedd5; }")
+        self.btn_nao_retorno.clicked.connect(lambda: self.alterar_status_retorno_selecionado("Não retornou"))
+        acoes_retornos.addWidget(self.btn_nao_retorno)
+        self.btn_cancelar_retorno = QPushButton("Cancelar")
+        self.btn_cancelar_retorno.setStyleSheet("QPushButton { background: #fef2f2; color: #b91c1c; border: 1px solid #fca5a5; border-radius: 5px; padding: 5px; font-weight: bold; } QPushButton:hover { background: #fee2e2; }")
+        self.btn_cancelar_retorno.clicked.connect(lambda: self.alterar_status_retorno_selecionado("Cancelado"))
+        acoes_retornos.addWidget(self.btn_cancelar_retorno)
+        right_layout.addLayout(acoes_retornos)
         
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
@@ -530,6 +569,18 @@ class PacientesScreen(QWidget):
         """)
         self.btn_excluir.clicked.connect(self.excluir_paciente)
         right_layout.addWidget(self.btn_excluir)
+
+        self.btn_programar_retorno = QPushButton("Programar retorno")
+        self.btn_programar_retorno.setVisible(False)
+        self.btn_programar_retorno.setStyleSheet("""
+            QPushButton {
+                background-color: #eff6ff; color: #0369a1; border: 1px solid #93c5fd;
+                border-radius: 6px; padding: 8px; font-weight: bold; min-height: 20px;
+            }
+            QPushButton:hover { background-color: #dbeafe; }
+        """)
+        self.btn_programar_retorno.clicked.connect(self.programar_retorno)
+        right_layout.addWidget(self.btn_programar_retorno)
         
         combobox_dropdown_style = """
             QComboBox { background-color: white; color: #0f172a; }
@@ -547,6 +598,24 @@ class PacientesScreen(QWidget):
         
         main_layout.addWidget(self.right_container)
         self.carregar_pacientes_tabela()
+        self._marcar_formulario_salvo()
+
+    def _estado_formulario_atual(self):
+        return (
+            self.input_nome.text(), self.input_tel.text(), self.input_nasc.date().toString("yyyy-MM-dd"),
+            self.input_convenio.text(), self.input_pasta.currentText(), self.input_sexo.currentText(),
+            self.input_cpf.text(), self.input_rg.text(), self.input_civil.text(), self.input_profissao.text(),
+            self.input_endereco.text(), self.input_qp.toPlainText(), self.id_em_edicao,
+        )
+
+    def _marcar_formulario_salvo(self):
+        self._estado_formulario_salvo = self._estado_formulario_atual()
+
+    def tem_alteracoes_nao_salvas(self):
+        return self._estado_formulario_atual() != getattr(self, "_estado_formulario_salvo", None)
+
+    def descartar_alteracoes_nao_salvas(self):
+        self.limpar_formulario()
 
     def mostrar_alerta_seguro(self, tipo, titulo, texto):
         msg = QMessageBox(self)
@@ -663,7 +732,7 @@ class PacientesScreen(QWidget):
         
         if not self.db.supabase:
             return
-            
+
         try:
             resposta = self.db.supabase.table("pacientes")\
                 .select("nome, telefone, nascimento, convenio, pasta, sexo, cpf, rg, estado_civil, profissao, endereco, queixa")\
@@ -698,10 +767,13 @@ class PacientesScreen(QWidget):
                 self.input_qp.setPlainText(p.get("queixa") or "")
                 
                 self.btn_excluir.setVisible(True)
+                self.btn_programar_retorno.setVisible(True)
+                self._marcar_formulario_salvo()
         except Exception as e:
             print(f"Erro ao carregar dados de texto do paciente: {e}")
             
         self.carregar_historico_fichas_paciente(self.id_em_edicao)
+        self.carregar_retornos_paciente(self.id_em_edicao)
 
     def carregar_historico_fichas_paciente(self, p_id):
         self.list_historico_fichas.clear()
@@ -724,6 +796,63 @@ class PacientesScreen(QWidget):
                     self.list_historico_fichas.addItem(w_item)
         except Exception as e:
             print(f"Erro ao buscar histórico de fichas no banco: {e}")
+
+    def carregar_retornos_paciente(self, paciente_id):
+        self.list_retornos.clear()
+        if not hasattr(self.db, "listar_retornos_paciente"):
+            return
+        retornos = self.db.listar_retornos_paciente(paciente_id)
+        for retorno in retornos:
+            data = QDate.fromString(str(retorno.get("data_prevista") or ""), "yyyy-MM-dd")
+            data_texto = data.toString("dd/MM/yyyy") if data.isValid() else "Data não informada"
+            status = str(retorno.get("status") or "Pendente")
+            motivo = str(retorno.get("motivo") or "Sem motivo informado").strip()
+            icone = {"Pendente": "🟠", "Agendado": "🔵", "Concluído": "🟢", "Não retornou": "🔴", "Cancelado": "⚪"}.get(status, "•")
+            item = QListWidgetItem(f"{icone} {data_texto} — {status} | {motivo}")
+            item.setData(Qt.ItemDataRole.UserRole, retorno)
+            self.list_retornos.addItem(item)
+
+    def _retorno_selecionado(self):
+        item = self.list_retornos.currentItem()
+        if not item:
+            self.mostrar_alerta_seguro("warning", "Selecione um retorno", "Clique em um retorno da lista primeiro.")
+            return None
+        return item.data(Qt.ItemDataRole.UserRole)
+
+    def agendar_retorno_selecionado(self):
+        retorno = self._retorno_selecionado()
+        if not retorno:
+            return
+        if retorno.get("status") != "Pendente":
+            self.mostrar_alerta_seguro("warning", "Retorno já tratado", "Somente retornos pendentes podem ser enviados para a Agenda.")
+            return
+        retorno["paciente_nome"] = self.input_nome.text().strip()
+        janela = getattr(self, "window_principal", None)
+        if janela and hasattr(janela, "agendar_retorno_do_painel"):
+            janela.agendar_retorno_do_painel(retorno)
+
+    def alterar_status_retorno_selecionado(self, novo_status):
+        retorno = self._retorno_selecionado()
+        if not retorno:
+            return
+        if retorno.get("status") == novo_status:
+            return
+        if novo_status in {"Não retornou", "Cancelado"}:
+            confirmar = QMessageBox.question(
+                self, "Confirmar alteração",
+                f"Deseja marcar este retorno como '{novo_status}'?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if confirmar != QMessageBox.StandardButton.Yes:
+                return
+        if self.db.atualizar_status_retorno(retorno.get("id"), novo_status):
+            self.carregar_retornos_paciente(self.id_em_edicao)
+            janela = getattr(self, "window_principal", None)
+            if janela and hasattr(janela, "screen_home"):
+                janela.screen_home.carregar_dados_iniciais()
+        else:
+            self.mostrar_alerta_seguro("error", "Status não alterado", "Não foi possível atualizar o retorno agora. Tente novamente.")
 
     def abrir_ficha_historico_selecionada(self, item):
         dados = item.data(Qt.UserRole)
@@ -848,8 +977,15 @@ class PacientesScreen(QWidget):
             return
             
         if not self.db.supabase:
+            self.mostrar_alerta_seguro(
+                "error", "Sem conexão",
+                "Não há uma conexão segura ativa. Feche e abra o aplicativo novamente."
+            )
             return
-            
+
+        if not iniciar_operacao(self.btn_salvar, "Salvando..."):
+            return
+
         try:
             payload = {
                 "consultorio_id": self.db.consultorio_id,
@@ -880,13 +1016,124 @@ class PacientesScreen(QWidget):
             self.carregar_pacientes_tabela()
             self.mostrar_alerta_seguro("success", "Sucesso", "Prontuário do paciente salvo com sucesso!")
         except Exception as e:
-            self.mostrar_alerta_seguro("error", "Erro Crítico", f"Erro ao salvar no banco:\n{str(e)}")
+            registrar_falha("salvar paciente", e)
+            self.mostrar_alerta_seguro("error", "Não foi possível salvar", mensagem_erro_usuario("salvar o paciente"))
+        finally:
+            finalizar_operacao(self.btn_salvar)
 
     def excluir_paciente(self):
         if self.id_em_edicao == -1:
             return
 
         self.excluir_paciente_por_id(self.id_em_edicao, self.input_nome.text())
+
+    def programar_retorno(self):
+        if self.id_em_edicao == -1:
+            self.mostrar_alerta_seguro("warning", "Selecione um paciente", "Abra o prontuário do paciente antes de programar um retorno.")
+            return
+
+        dialogo = QDialog(self)
+        dialogo.setWindowTitle("Programar retorno")
+        dialogo.setMinimumWidth(380)
+        dialogo.setStyleSheet("""
+            QDialog { background: #ffffff; }
+            QLabel { color: #334155; font-size: 13px; }
+            QLineEdit, QDateEdit {
+                background: #ffffff; color: #0f172a; border: 1px solid #cbd5e1;
+                border-radius: 6px; padding: 7px 9px; min-height: 20px;
+            }
+            QLineEdit:focus, QDateEdit:focus { border: 1px solid #0284c7; }
+            QDateEdit::drop-down {
+                border: none; width: 28px; background: #f8fafc;
+                border-left: 1px solid #e2e8f0;
+            }
+            QPushButton {
+                background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1;
+                border-radius: 6px; padding: 8px 14px; font-weight: bold;
+            }
+            QPushButton:hover { background: #e2e8f0; }
+        """)
+        layout = QVBoxLayout(dialogo)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+        layout.addWidget(QLabel(f"Paciente: {self.input_nome.text().strip()}"))
+        layout.addWidget(QLabel("Data prevista:"))
+        data_prevista = QDateEdit()
+        data_prevista.setCalendarPopup(True)
+        data_prevista.setDisplayFormat("dd/MM/yyyy")
+        data_prevista.setDate(QDate.currentDate().addDays(30))
+        linha_data = QHBoxLayout()
+        linha_data.addWidget(data_prevista, 1)
+        btn_calendario = QPushButton("Calendário")
+        btn_calendario.setToolTip("Abrir calendário para escolher a data")
+        btn_calendario.clicked.connect(lambda: self.abrir_calendario_retorno(data_prevista))
+        linha_data.addWidget(btn_calendario)
+        layout.addLayout(linha_data)
+        layout.addWidget(QLabel("Motivo do retorno (opcional):"))
+        motivo = QLineEdit()
+        motivo.setPlaceholderText("Ex: Revisar exames e evolução clínica")
+        layout.addWidget(motivo)
+        botoes = QHBoxLayout()
+        botoes.addStretch()
+        btn_cancelar = QPushButton("Cancelar")
+        btn_confirmar = QPushButton("Criar retorno")
+        btn_confirmar.setStyleSheet("QPushButton { background: #0284c7; color: white; border: none; border-radius: 6px; padding: 8px 14px; font-weight: bold; } QPushButton:hover { background: #0369a1; }")
+        btn_cancelar.clicked.connect(dialogo.reject)
+        btn_confirmar.clicked.connect(dialogo.accept)
+        botoes.addWidget(btn_cancelar)
+        botoes.addWidget(btn_confirmar)
+        layout.addLayout(botoes)
+
+        if dialogo.exec() != QDialog.DialogCode.Accepted:
+            return
+        if self.db.criar_retorno(
+            self.id_em_edicao,
+            data_prevista.date().toString("yyyy-MM-dd"),
+            motivo.text(),
+        ):
+            self.mostrar_alerta_seguro("success", "Retorno programado", "O retorno foi criado e aparecerá no Painel Principal.")
+            janela = getattr(self, "window_principal", None)
+            if janela and hasattr(janela, "screen_home"):
+                janela.screen_home.carregar_dados_iniciais()
+        else:
+            self.mostrar_alerta_seguro("error", "Retorno não criado", "Não foi possível criar o retorno agora. Tente novamente.")
+
+    def abrir_calendario_retorno(self, campo_data):
+        """Abre um calendário simples, sem impedir a digitação manual da data."""
+        calendario_popup = QDialog(self)
+        calendario_popup.setWindowTitle("Escolher data do retorno")
+        calendario_popup.setStyleSheet("""
+            QDialog { background: #ffffff; }
+            QCalendarWidget { background: #ffffff; color: #0f172a; }
+            QCalendarWidget QWidget { background: #ffffff; color: #0f172a; }
+            QCalendarWidget QWidget#qt_calendar_navigationbar { background: #0284c7; }
+            QCalendarWidget QToolButton {
+                background: #0284c7; color: #ffffff; border: none;
+                font-weight: bold; padding: 5px;
+            }
+            QCalendarWidget QToolButton:hover { background: #0369a1; }
+            QCalendarWidget QMenu, QCalendarWidget QSpinBox {
+                background: #ffffff; color: #0f172a; border: 1px solid #cbd5e1;
+            }
+            QCalendarWidget QTableView {
+                background: #ffffff; color: #0f172a;
+                selection-background-color: #0284c7; selection-color: #ffffff;
+                alternate-background-color: #f8fafc;
+                gridline-color: #e2e8f0;
+            }
+            QCalendarWidget QTableView::item:disabled { color: #94a3b8; }
+            QCalendarWidget QAbstractItemView:enabled {
+                background: #ffffff; color: #0f172a;
+                selection-background-color: #0284c7; selection-color: #ffffff;
+            }
+        """)
+        layout = QVBoxLayout(calendario_popup)
+        calendario = QCalendarWidget()
+        calendario.setSelectedDate(campo_data.date())
+        calendario.setGridVisible(True)
+        calendario.clicked.connect(lambda data: (campo_data.setDate(data), calendario_popup.accept()))
+        layout.addWidget(calendario)
+        calendario_popup.exec()
 
     def excluir_paciente_por_id(self, paciente_id, nome_paciente):
         """Confirma e executa a exclusão lógica de um paciente."""
@@ -934,8 +1181,10 @@ class PacientesScreen(QWidget):
         self.input_endereco.clear()
         self.input_qp.clear()
         self.list_historico_fichas.clear()
+        self.list_retornos.clear()
         self.tabela.clearSelection()
         self.btn_excluir.setVisible(False)
+        self.btn_programar_retorno.setVisible(False)
         # Sempre garante que "Geral" (ou a primeira pasta válida) fique
         # selecionada — nunca deixa o combo em branco (índice -1), que
         # antes podia gravar o paciente com pasta="" (invisível na contagem).
@@ -944,6 +1193,7 @@ class PacientesScreen(QWidget):
             self.input_pasta.setCurrentIndex(indice_geral)
         elif self.input_pasta.count() > 0:
             self.input_pasta.setCurrentIndex(0)
+        self._marcar_formulario_salvo()
 
     def preencher_formulario_via_importacao(self, dados):
         self.input_nome.setText(dados.get("nome", ""))
