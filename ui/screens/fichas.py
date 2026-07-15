@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QDateEdit, QRadioButton, QButtonGroup)
 from PySide6.QtGui import QPixmap, QDesktopServices, QColor, QDoubleValidator
 from PySide6.QtCore import Qt, QUrl, QDate
-from database import Database  # Importa o gerenciador de banco de dados unificado
 
 try:
     from docx import Document
@@ -81,10 +80,11 @@ class CustomInputDialog(QDialog):
 
 
 class FichasScreen(QWidget):
-    def __init__(self):
+    def __init__(self, database_instancia):
         super().__init__()
         
-        self.db = Database()  # Instancia a conexão unificada com o Supabase
+        self.db = database_instancia
+        self._formulario_sujo = False
         self.modelo_atual_campos = [] 
         self.widgets_dinamicos = {}   
         self.modo_criacao = False 
@@ -246,6 +246,7 @@ class FichasScreen(QWidget):
             resposta = self.db.supabase.table("pacientes")\
                 .select("id, nome")\
                 .eq("consultorio_id", self.db.consultorio_id)\
+                .is_("deleted_at", "null")\
                 .order("nome", desc=False)\
                 .execute()
                 
@@ -1034,6 +1035,7 @@ class FichasScreen(QWidget):
                     self.db.supabase.table("fichas_preenchidas")\
                         .update({"anexos": json.dumps(metadados_anexos, ensure_ascii=False)})\
                         .eq("id", ficha_id)\
+                        .eq("consultorio_id", self.db.consultorio_id)\
                         .execute()
             
             # Limpa os campos após salvar com sucesso
@@ -1047,6 +1049,7 @@ class FichasScreen(QWidget):
 
             self.arquivos_anexados = []
             self.renderizar_anexos_thumbnails()
+            self._formulario_sujo = False
                 
             self.exibir_popup("info", "Ficha Salva", "O atendimento foi registrado com sucesso!")
         except Exception as e:

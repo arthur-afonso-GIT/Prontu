@@ -4,8 +4,6 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QInputDialog, QMessageBox, QTableWidgetItem, QColorDialog)
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor
-from database import Database
-
 class HomeScreen(QWidget):
     def __init__(self, window_principal, on_novo_paciente_click=None, on_pasta_click=None):
         super().__init__()
@@ -13,7 +11,7 @@ class HomeScreen(QWidget):
         self.window_principal = window_principal
         self.on_novo_paciente_click = on_novo_paciente_click
         self.on_pasta_click = on_pasta_click
-        self.db = Database()  # Gerenciador unificado Supabase
+        self.db = window_principal.db
         
         # Layout Principal
         main_layout = QVBoxLayout(self)
@@ -200,7 +198,8 @@ class HomeScreen(QWidget):
             nome_limpo = nome_pasta.strip()
             query = self.db.supabase.table("pacientes")\
                 .select("id", count="exact")\
-                .eq("consultorio_id", self.db.consultorio_id)
+                .eq("consultorio_id", self.db.consultorio_id)\
+                .is_("deleted_at", "null")
 
             if nome_limpo.lower() == "geral":
                 # "Geral" também deve contar pacientes antigos que ficaram com
@@ -235,6 +234,7 @@ class HomeScreen(QWidget):
             resposta_pacientes = self.db.supabase.table("pacientes")\
                 .select("id, nome, pasta")\
                 .eq("consultorio_id", self.db.consultorio_id)\
+                .is_("deleted_at", "null")\
                 .order("id", desc=True)\
                 .execute()
                 

@@ -110,7 +110,7 @@ class MainWindow(QMainWindow):
         )
         self.screen_pacientes = PacientesScreen(self.db)
         self.screen_agenda = AgendaScreen(self.db)
-        self.screen_fichas = FichasScreen() if FichasScreen is not None else QWidget()
+        self.screen_fichas = FichasScreen(self.db) if FichasScreen is not None else QWidget()
         # ConfiguracoesScreen também precisa da JANELA PRINCIPAL (self), não do banco,
         # para conseguir chamar self.screen_home.atualizar_saudacao_dinamica() ao salvar.
         self.screen_config = ConfiguracoesScreen(window_principal=self)

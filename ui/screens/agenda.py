@@ -193,6 +193,7 @@ class AgendaScreen(QWidget):
                 resposta = self.db_gerenciador.supabase.table("pacientes")\
                     .select("nome")\
                     .eq("consultorio_id", self.db_gerenciador.consultorio_id)\
+                    .is_("deleted_at", "null")\
                     .execute()
                 nomes = [row["nome"] for row in resposta.data] if resposta.data else []
                 self.atualizar_lista_sugestoes(nomes)

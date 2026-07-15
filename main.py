@@ -116,8 +116,8 @@ def inicializar_sistema():
     # Inicializa o banco de dados principal
     db = Database()
     
-    # Se a máquina não estiver autenticada, solicita a chave
-    while db.consultorio_id is None:
+    # Se não houver sessão autenticada, solicita a chave
+    while not db.esta_autenticado():
         chave, ok = QInputDialog.getText(
             None, 
             "Ativação do Sistema — Prontu", 

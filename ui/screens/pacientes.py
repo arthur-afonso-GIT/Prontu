@@ -469,6 +469,7 @@ class PacientesScreen(QWidget):
                 resposta = self.db.supabase.table("pacientes")\
                     .select("id, nome, telefone, convenio, pasta")\
                     .eq("consultorio_id", self.db.consultorio_id)\
+                    .is_("deleted_at", "null")\
                     .order("nome", desc=False)\
                     .execute()
                 
@@ -565,6 +566,7 @@ class PacientesScreen(QWidget):
                 .select("id, modelo_nome, data_atendimento, dados_respostas")\
                 .eq("paciente_id", p_id)\
                 .eq("consultorio_id", self.db.consultorio_id)\
+                .is_("deleted_at", "null")\
                 .order("id", desc=True)\
                 .execute()
             
@@ -593,6 +595,7 @@ class PacientesScreen(QWidget):
             resposta = self.db.supabase.table("pacientes")\
                 .select("id, nome, telefone, convenio, pasta, cpf, rg")\
                 .eq("consultorio_id", self.db.consultorio_id)\
+                .is_("deleted_at", "null")\
                 .order("nome", desc=False)\
                 .execute()
             
@@ -707,23 +710,14 @@ class PacientesScreen(QWidget):
             if not self.db.supabase:
                 return
             try:
-                self.db.supabase.table("pacientes")\
-                    .delete()\
-                    .eq("id", self.id_em_edicao)\
-                    .eq("consultorio_id", self.db.consultorio_id)\
-                    .execute()
-                    
-                self.db.supabase.table("fichas_preenchidas")\
-                    .delete()\
-                    .eq("paciente_id", self.id_em_edicao)\
-                    .eq("consultorio_id", self.db.consultorio_id)\
-                    .execute()
-                
-                self.limpar_formulario()
-                self.carregar_pacientes_tabela()
-                self.mostrar_alerta_seguro("success", "Excluído", "O registro do paciente foi deletado com sucesso.")
+                if self.db.soft_delete_paciente(self.id_em_edicao):
+                    self.limpar_formulario()
+                    self.carregar_pacientes_tabela()
+                    self.mostrar_alerta_seguro("success", "Excluído", "O registro foi marcado como excluído (exclusão lógica).")
+                else:
+                    self.mostrar_alerta_seguro("error", "Erro", "Falha ao excluir registro.")
             except Exception as e:
-                self.mostrar_alerta_seguro("error", "Erro", f"Falha ao deletar registro:\n{str(e)}")
+                self.mostrar_alerta_seguro("error", "Erro", "Falha ao excluir registro.")
 
     def limpar_formulario(self):
         self.id_em_edicao = -1
