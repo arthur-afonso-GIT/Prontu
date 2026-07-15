@@ -5,3 +5,5 @@ python-dotenv
 httpx
 cryptography
 keyring
+python-docx
+pypdf

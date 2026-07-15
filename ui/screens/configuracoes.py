@@ -299,30 +299,42 @@ class ConfiguracoesScreen(QWidget):
         """Busca do banco de dados e preenche os campos."""
         if not self.db:
             return
-        nome_atual = self.db.obter_nome_profissional()
+        defaults = {
+            "nome_profissional": "",
+            "backup_dir": self._pasta_backup_padrao,
+            "backup_freq": "manual",
+            "backup_retencao": "30",
+            "backup_include_attachments": "0",
+            "backup_last_success": "",
+            "backup_last_path": "",
+            "backup_last_size": "0",
+            "backup_last_error": "",
+        }
+        valores = defaults | self.db.obter_configuracoes(list(defaults))
+        nome_atual = valores["nome_profissional"]
         self.input_nome.setText(nome_atual)
 
         self.input_backup_dir.setText(
-            self.db.obter_configuracao("backup_dir", self._pasta_backup_padrao)
+            valores["backup_dir"]
             or self._pasta_backup_padrao
         )
-        freq = self.db.obter_configuracao("backup_freq", "manual")
+        freq = valores["backup_freq"]
         idx = self.combo_backup_freq.findText(freq)
         if idx >= 0:
             self.combo_backup_freq.setCurrentIndex(idx)
         try:
             self.input_retencao.setValue(
-                int(self.db.obter_configuracao("backup_retencao", "30"))
+                int(valores["backup_retencao"])
             )
         except ValueError:
             self.input_retencao.setValue(30)
         self.chk_incluir_anexos.setChecked(
-            self.db.obter_configuracao("backup_include_attachments", "0") == "1"
+            valores["backup_include_attachments"] == "1"
         )
-        last = self.db.obter_configuracao("backup_last_success", "")
-        path = self.db.obter_configuracao("backup_last_path", "")
-        size = self.db.obter_configuracao("backup_last_size", "0")
-        err = self.db.obter_configuracao("backup_last_error", "")
+        last = valores["backup_last_success"]
+        path = valores["backup_last_path"]
+        size = valores["backup_last_size"]
+        err = valores["backup_last_error"]
         if last:
             self.lbl_backup_status.setText(
                 f"Último backup: {last}\nDestino: {path} ({int(size) // 1024} KB)"

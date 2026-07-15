@@ -3,7 +3,7 @@ import sys
 import time
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
                                QPushButton, QStackedWidget, QLabel, QFrame)
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 
 from ui.screens.home import HomeScreen
 from ui.screens.pacientes import PacientesScreen
@@ -162,6 +162,12 @@ class MainWindow(QMainWindow):
         if agora - ultima < 2.0:
             return
         self._ultima_atualizacao_tela[indice] = agora
+        QTimer.singleShot(40, lambda: self._atualizar_tela_visivel(indice))
+
+    def _atualizar_tela_visivel(self, indice):
+        """Atualiza dados depois que a tela escolhida já foi desenhada."""
+        if self.painel_telas.currentIndex() != indice:
+            return
 
         if indice == 0:
             if hasattr(self.screen_home, 'renderizar_lista_pastas'):

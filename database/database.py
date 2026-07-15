@@ -275,6 +275,26 @@ class Database:
             print(f"Erro ao obter configuração {chave}: {e}")
         return default
 
+    def obter_configuracoes(self, chaves: list[str]) -> dict[str, str]:
+        """Busca várias configurações em uma única chamada ao Supabase."""
+        if not self.supabase or self.consultorio_id is None or not chaves:
+            return {}
+        try:
+            resposta = (
+                self.supabase.table("configuracoes")
+                .select("chave, valor")
+                .eq("consultorio_id", self.consultorio_id)
+                .in_("chave", chaves)
+                .execute()
+            )
+            return {
+                item["chave"]: item.get("valor", "")
+                for item in (resposta.data or [])
+            }
+        except Exception as e:
+            print(f"Erro ao obter configurações: {e}")
+            return {}
+
     def salvar_configuracao(self, chave: str, valor: str) -> None:
         if not self.supabase or self.consultorio_id is None:
             return
@@ -359,6 +379,21 @@ class Database:
     def soft_delete_paciente(self, paciente_id: int) -> bool:
         """Exclusão lógica — preserva dados clínicos."""
         if not self.supabase or self.consultorio_id is None:
+            return False
+
+    def soft_delete_ficha(self, ficha_id: int) -> bool:
+        """Remove uma ficha da visualização sem apagar seu histórico clínico."""
+        if not self.supabase or self.consultorio_id is None:
+            return False
+        try:
+            from datetime import datetime, timezone
+
+            self.supabase.table("fichas_preenchidas").update(
+                {"deleted_at": datetime.now(timezone.utc).isoformat()}
+            ).eq("id", ficha_id).eq("consultorio_id", self.consultorio_id).execute()
+            return True
+        except Exception as e:
+            print(f"Erro ao excluir ficha: {e}")
             return False
         try:
             from datetime import datetime, timezone

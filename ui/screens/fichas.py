@@ -2,6 +2,8 @@ import os
 import json
 import uuid
 import mimetypes
+import re
+import unicodedata
 from datetime import datetime
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QComboBox, QScrollArea, 
@@ -88,6 +90,7 @@ class FichasScreen(QWidget):
         self.modelo_atual_campos = [] 
         self.widgets_dinamicos = {}   
         self.modo_criacao = False 
+        self._nome_modelo_importado = None
         self.arquivos_anexados = []  # Lista de caminhos locais pendentes de upload (limpa após salvar)
         
         self.main_layout = QHBoxLayout(self)
@@ -167,6 +170,21 @@ class FichasScreen(QWidget):
         self.btn_criar_modelo.clicked.connect(self.iniciar_criacao_modelo)
         self.left_layout.addWidget(self.btn_criar_modelo)
 
+        acoes_modelo = QHBoxLayout()
+        self.btn_editar_modelo = QPushButton("Editar modelo")
+        self.btn_editar_modelo.setStyleSheet(
+            "QPushButton { background-color: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd; padding: 8px; font-weight: bold; border-radius: 6px; }"
+        )
+        self.btn_editar_modelo.clicked.connect(self.editar_modelo_selecionado)
+        self.btn_excluir_modelo = QPushButton("Excluir modelo")
+        self.btn_excluir_modelo.setStyleSheet(
+            "QPushButton { background-color: #fff7ed; color: #c2410c; border: 1px solid #fdba74; padding: 8px; font-weight: bold; border-radius: 6px; }"
+        )
+        self.btn_excluir_modelo.clicked.connect(self.excluir_modelo_selecionado)
+        acoes_modelo.addWidget(self.btn_editar_modelo)
+        acoes_modelo.addWidget(self.btn_excluir_modelo)
+        self.left_layout.addLayout(acoes_modelo)
+
         # --- SEÇÃO DE ANEXOS (fotos/PDFs vinculados ao atendimento atual) ---
         sep_anexos = QFrame()
         sep_anexos.setStyleSheet("background-color: #e2e8f0; max-height: 1px; border: none; margin: 8px 0;")
@@ -204,6 +222,11 @@ class FichasScreen(QWidget):
         """)
         self.btn_salvar_atendimento.clicked.connect(self.salvar_ficha_preenchida)
         self.left_layout.addWidget(self.btn_salvar_atendimento)
+
+        self.lbl_status_operacao = QLabel("")
+        self.lbl_status_operacao.setWordWrap(True)
+        self.lbl_status_operacao.setStyleSheet("color: #15803d; font-size: 12px; padding-top: 4px;")
+        self.left_layout.addWidget(self.lbl_status_operacao)
         
         self.main_layout.addWidget(self.left_panel)
         
@@ -300,7 +323,46 @@ class FichasScreen(QWidget):
             except Exception as e:
                 print(f"Erro ao obter modelo de ficha: {e}")
 
+    def editar_modelo_selecionado(self):
+        nome_modelo = self.combo_modelo.currentText()
+        if not nome_modelo or "Padrão" in nome_modelo:
+            self.exibir_popup("aviso", "Modelo padrão", "Crie uma cópia para editar o modelo padrão.")
+            return
+        try:
+            resposta = self.db.supabase.table("modelos_fichas")\
+                .select("estrutura_json")\
+                .eq("consultorio_id", self.db.consultorio_id)\
+                .eq("nome_modelo", nome_modelo)\
+                .maybe_single().execute()
+            if resposta.data:
+                self.iniciar_criacao_modelo(json.loads(resposta.data["estrutura_json"]), origem=nome_modelo)
+        except Exception as e:
+            self.exibir_popup("erro", "Não foi possível abrir", "Não foi possível abrir esse modelo para edição.")
+
+    def excluir_modelo_selecionado(self):
+        nome_modelo = self.combo_modelo.currentText()
+        if not nome_modelo or "Padrão" in nome_modelo:
+            self.exibir_popup("aviso", "Modelo padrão", "O modelo padrão não pode ser excluído.")
+            return
+        confirmar = QMessageBox.question(
+            self, "Excluir modelo", f"Excluir o modelo '{nome_modelo}'? Fichas já preenchidas não serão apagadas.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirmar != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.db.supabase.table("modelos_fichas").delete()\
+                .eq("consultorio_id", self.db.consultorio_id)\
+                .eq("nome_modelo", nome_modelo).execute()
+            self.carregar_modelos_iniciais_combo()
+            self.gerar_modelo_padrao()
+        except Exception:
+            self.exibir_popup("erro", "Não foi possível excluir", "O modelo não foi excluído.")
+
     def exibir_popup(self, tipo, titulo, mensagem):
+        if tipo == "info":
+            self.lbl_status_operacao.setText(mensagem)
+            return
         msg = QMessageBox(self)
         if tipo == "info": msg.setIcon(QMessageBox.Information)
         elif tipo == "aviso": msg.setIcon(QMessageBox.Warning)
@@ -342,9 +404,10 @@ class FichasScreen(QWidget):
         ]
         self.renderizar_formulario_dinamico()
 
-    def iniciar_criacao_modelo(self):
+    def iniciar_criacao_modelo(self, campos_iniciais=None, origem="Novo modelo"):
         self.modo_criacao = True
-        self.modelo_atual_campos = []
+        self._nome_modelo_importado = origem
+        self.modelo_atual_campos = list(campos_iniciais or [])
         self.widgets_dinamicos.clear()
         
         self.limpar_layout_completamente(self.dinamic_form_layout)
@@ -357,8 +420,10 @@ class FichasScreen(QWidget):
         lbl_sub.setStyleSheet("color: #64748b; font-size: 13px; margin-bottom: 12px;")
         self.dinamic_form_layout.addWidget(lbl_sub)
         
-        btn_layout = QHBoxLayout()
+        btn_layout = QVBoxLayout()
         btn_layout.setSpacing(8)
+        primeira_linha_botoes = QHBoxLayout()
+        segunda_linha_botoes = QHBoxLayout()
         
         btn_add_secao = QPushButton("+ Seção (Título)")
         btn_add_curto = QPushButton("+ Texto Curto")
@@ -367,15 +432,21 @@ class FichasScreen(QWidget):
         btn_add_numero = QPushButton("+ Número")
         btn_add_data = QPushButton("+ Data")
         btn_add_multipla = QPushButton("+ Múltipla Escolha")
+        btn_modelo_inicial = QPushButton("Usar modelo inicial")
         
         estilo_botoes_add = """
             QPushButton { background-color: #f8fafc; color: #334155; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; font-weight: bold; font-size: 12px;}
             QPushButton:hover { background-color: #f1f5f9; border: 1px solid #94a3b8; }
         """
-        botoes_add = [btn_add_secao, btn_add_curto, btn_add_longo, btn_add_check, btn_add_numero, btn_add_data, btn_add_multipla]
-        for b in botoes_add:
+        botoes_add = [btn_add_secao, btn_add_curto, btn_add_longo, btn_add_check, btn_add_numero, btn_add_data, btn_add_multipla, btn_modelo_inicial]
+        for indice_botao, b in enumerate(botoes_add):
             b.setStyleSheet(estilo_botoes_add)
-            btn_layout.addWidget(b)
+            if indice_botao < 4:
+                primeira_linha_botoes.addWidget(b)
+            else:
+                segunda_linha_botoes.addWidget(b)
+        btn_layout.addLayout(primeira_linha_botoes)
+        btn_layout.addLayout(segunda_linha_botoes)
             
         btn_add_secao.clicked.connect(lambda: self.adicionar_elemento_rascunho("secao"))
         btn_add_curto.clicked.connect(lambda: self.adicionar_elemento_rascunho("texto_curto"))
@@ -384,6 +455,7 @@ class FichasScreen(QWidget):
         btn_add_numero.clicked.connect(lambda: self.adicionar_elemento_rascunho("numero"))
         btn_add_data.clicked.connect(lambda: self.adicionar_elemento_rascunho("data"))
         btn_add_multipla.clicked.connect(lambda: self.adicionar_elemento_rascunho("multipla_escolha"))
+        btn_modelo_inicial.clicked.connect(self.aplicar_modelo_inicial_rascunho)
         
         self.dinamic_form_layout.addLayout(btn_layout)
         
@@ -415,6 +487,27 @@ class FichasScreen(QWidget):
         acoes_layout.addWidget(btn_finalizar)
         self.dinamic_form_layout.addLayout(acoes_layout)
         
+        self.atualizar_visualizacao_preview()
+
+    def aplicar_modelo_inicial_rascunho(self):
+        """Oferece uma base editável, evitando começar um modelo do zero."""
+        if self.modelo_atual_campos:
+            resposta = QMessageBox.question(
+                self, "Substituir rascunho", "Trocar os campos atuais pelo modelo inicial?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if resposta != QMessageBox.StandardButton.Yes:
+                return
+        self.modelo_atual_campos = [
+            {"tipo": "secao", "label": "Identificacao"},
+            {"tipo": "texto_curto", "label": "Motivo da consulta", "id": "motivo_consulta"},
+            {"tipo": "secao", "label": "Avaliacao"},
+            {"tipo": "texto_longo", "label": "Historico e observacoes", "id": "historico_observacoes"},
+            {"tipo": "numero", "label": "Peso", "id": "peso", "unidade": "kg"},
+            {"tipo": "data", "label": "Data do atendimento", "id": "data_atendimento"},
+            {"tipo": "secao", "label": "Plano"},
+            {"tipo": "texto_longo", "label": "Conduta e orientacoes", "id": "conduta_orientacoes"},
+        ]
         self.atualizar_visualizacao_preview()
 
     def adicionar_elemento_rascunho(self, tipo):
@@ -481,6 +574,20 @@ class FichasScreen(QWidget):
         estilo_btn_ferramenta = "QPushButton { background-color: #ffffff; color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 10px; padding: 2px; } QPushButton:hover { background-color: #f1f5f9; }"
 
         total_campos = len(self.modelo_atual_campos)
+        cabecalho_preview = QFrame()
+        cabecalho_preview.setStyleSheet(
+            "QFrame { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; }"
+        )
+        cabecalho_layout = QHBoxLayout(cabecalho_preview)
+        cabecalho_layout.setContentsMargins(12, 8, 12, 8)
+        titulo_preview = QLabel("Pre-visualizacao da ficha")
+        titulo_preview.setStyleSheet("font-weight: bold; color: #1e3a8a; border: none;")
+        contador_preview = QLabel(f"{total_campos} elemento(s)")
+        contador_preview.setStyleSheet("color: #475569; border: none;")
+        cabecalho_layout.addWidget(titulo_preview)
+        cabecalho_layout.addStretch()
+        cabecalho_layout.addWidget(contador_preview)
+        self.preview_layout.addWidget(cabecalho_preview)
 
         for indice, campo in enumerate(self.modelo_atual_campos):
             tipo = campo.get("tipo")
@@ -492,6 +599,14 @@ class FichasScreen(QWidget):
             linha_layout = QHBoxLayout(linha_container)
             linha_layout.setContentsMargins(8, 6, 8, 6)
             linha_layout.setSpacing(8)
+
+            ordem = QLabel(str(indice + 1))
+            ordem.setFixedSize(24, 24)
+            ordem.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            ordem.setStyleSheet(
+                "QLabel { background: #e0f2fe; color: #0369a1; border-radius: 12px; font-weight: bold; }"
+            )
+            linha_layout.addWidget(ordem, alignment=Qt.AlignmentFlag.AlignTop)
 
             conteudo_layout = QVBoxLayout()
             conteudo_layout.setSpacing(2)
@@ -589,6 +704,16 @@ class FichasScreen(QWidget):
 
             ferramentas_layout.addLayout(linha_botoes_topo)
 
+            if tipo == "secao":
+                btn_converter = QPushButton("Campo")
+                btn_converter.setToolTip("Transformar esta secao em campo de texto")
+                btn_converter.setFixedHeight(20)
+                btn_converter.setStyleSheet(estilo_btn_ferramenta)
+                btn_converter.clicked.connect(
+                    lambda _, i=indice: self.converter_secao_em_campo(i)
+                )
+                ferramentas_layout.addWidget(btn_converter)
+
             linha_botoes_baixo = QHBoxLayout()
             linha_botoes_baixo.setSpacing(2)
 
@@ -620,6 +745,20 @@ class FichasScreen(QWidget):
                 self.modelo_atual_campos[novo_indice], self.modelo_atual_campos[indice]
             self.atualizar_visualizacao_preview()
 
+    def converter_secao_em_campo(self, indice):
+        """Permite corrigir uma secao importada que deveria ser preenchivel."""
+        if not (0 <= indice < len(self.modelo_atual_campos)):
+            return
+        campo = self.modelo_atual_campos[indice]
+        if campo.get("tipo") != "secao":
+            return
+        texto_sem_acento = unicodedata.normalize(
+            "NFKD", campo.get("label", "campo")
+        ).encode("ascii", "ignore").decode("ascii")
+        campo["tipo"] = "texto_longo"
+        campo["id"] = f"importado_{indice}_{re.sub(r'[^a-z0-9]+', '_', texto_sem_acento.lower()).strip('_')}"
+        self.atualizar_visualizacao_preview()
+
     def editar_campo_rascunho(self, indice):
         """Abre um diálogo pré-preenchido para renomear o rótulo do campo/seção."""
         if not (0 <= indice < len(self.modelo_atual_campos)):
@@ -644,6 +783,9 @@ class FichasScreen(QWidget):
             return
             
         dial = CustomInputDialog("Salvar Modelo", "Dê um nome para este novo modelo de ficha:", self)
+        if self._nome_modelo_importado and self._nome_modelo_importado != "Novo modelo":
+            sugestao = os.path.splitext(os.path.basename(self._nome_modelo_importado))[0]
+            dial.input_field.setText(sugestao)
         if dial.exec() == QDialog.Accepted:
             nome_modelo = dial.get_text()
             if not nome_modelo: return
@@ -669,6 +811,7 @@ class FichasScreen(QWidget):
             ).execute()
             
             self.modo_criacao = False
+            self._nome_modelo_importado = None
             self.carregar_modelos_iniciais_combo()
             self.combo_modelo.setCurrentText(nome_modelo)
             self.renderizar_formulario_dinamico()
@@ -714,17 +857,63 @@ class FichasScreen(QWidget):
 
         return novos_campos
 
+    def _detectar_campos_melhorado(self, linhas_texto):
+        """Interpreta estruturas frequentes de fichas Word/PDF para revisão no construtor."""
+        campos = []
+        ids = set()
+        for linha in linhas_texto:
+            texto = re.sub(r"\s+", " ", (linha or "")).strip(" -\t")
+            if not texto or len(texto) > 180:
+                continue
+
+            opcoes = re.findall(r"\(\s*\)\s*([^()]{1,35}?)(?=\s*\(\s*\)|$)", texto)
+            tem_checkbox = any(marcador in texto for marcador in ("[ ]", "☐", "□"))
+            encontrado = re.match(r"^(.{2,80}?)(?:\s*:\s*|\s*[-–]\s+|\s*[_.]{3,}\s*$)", texto)
+
+            if encontrado:
+                label = encontrado.group(1).strip(" -:;,. ")
+                texto_sem_acento = unicodedata.normalize("NFKD", label).encode("ascii", "ignore").decode("ascii")
+                campo_id = re.sub(r"[^a-z0-9]+", "_", texto_sem_acento.lower()).strip("_")
+                if not label or campo_id in ids:
+                    continue
+                ids.add(campo_id)
+                palavras = campo_id.lower()
+                if len(opcoes) >= 2:
+                    campos.append({"tipo": "multipla_escolha", "label": label, "id": campo_id, "opcoes": opcoes})
+                elif tem_checkbox:
+                    campos.append({"tipo": "checkbox", "label": label, "id": campo_id})
+                elif any(x in palavras for x in ("data", "nasc", "consulta", "atendimento")):
+                    campos.append({"tipo": "data", "label": label, "id": campo_id})
+                elif any(x in palavras for x in ("peso", "altura", "idade", "pressao", "temperatura", "frequencia", "glicemia")):
+                    campos.append({"tipo": "numero", "label": label, "id": campo_id})
+                elif any(x in palavras for x in ("qp", "hda", "conduta", "antecedentes", "historico", "medicamentos", "observacoes", "evolucao", "anamnese")):
+                    campos.append({"tipo": "texto_longo", "label": label, "id": campo_id})
+                else:
+                    campos.append({"tipo": "texto_curto", "label": label, "id": campo_id})
+            elif len(texto) <= 70:
+                # Na importacao, uma linha isolada e tratada como campo. Isso
+                # evita perder QP, HDA e outros rotulos clinicos em maiusculas.
+                label = texto.rstrip(":").strip()
+                texto_sem_acento = unicodedata.normalize("NFKD", label).encode("ascii", "ignore").decode("ascii")
+                campo_id = re.sub(r"[^a-z0-9]+", "_", texto_sem_acento.lower()).strip("_")
+                if not label or campo_id in ids:
+                    continue
+                ids.add(campo_id)
+                palavras = campo_id.lower()
+                tipo = "texto_longo" if any(
+                    x in palavras for x in ("qp", "hda", "conduta", "antecedentes", "historico", "medicamentos", "observacoes", "evolucao", "anamnese", "exame", "avaliacao")
+                ) else "texto_curto"
+                campos.append({"tipo": tipo, "label": label, "id": campo_id})
+        return campos
+
     def _aplicar_modelo_importado(self, novos_campos, nome_arquivo):
         if novos_campos:
-            self.modo_criacao = False
-            self.modelo_atual_campos = novos_campos
-            self.renderizar_formulario_dinamico()
-
             nome_reduzido = os.path.basename(nome_arquivo)
-            if self.combo_modelo.findText(f"✨ {nome_reduzido}") == -1:
-                self.combo_modelo.addItem(f"✨ {nome_reduzido}")
-            self.combo_modelo.setCurrentText(f"✨ {nome_reduzido}")
-            self.exibir_popup("info", "Sucesso", f"Modelo carregado!\n{len(novos_campos)} elementos criados.")
+            self.iniciar_criacao_modelo(novos_campos, origem=nome_reduzido)
+            self.exibir_popup(
+                "info", "Documento interpretado",
+                f"Encontramos {len(novos_campos)} elementos. Revise, edite e salve o modelo quando estiver satisfeito.",
+            )
         else:
             self.exibir_popup("aviso", "Aviso", "Nenhum campo estruturado foi identificado.")
 
@@ -754,7 +943,10 @@ class FichasScreen(QWidget):
                                 if rastro.replace(",", "").strip():
                                     linhas_texto.append(rastro)
 
-            novos_campos = self._detectar_campos_a_partir_de_linhas(linhas_texto)
+            if not linhas_texto:
+                self.exibir_popup("aviso", "Documento sem texto", "Não encontramos texto no Word selecionado.")
+                return
+            novos_campos = self._detectar_campos_melhorado(linhas_texto)
             self._aplicar_modelo_importado(novos_campos, file_path)
         except Exception as e:
             self.exibir_popup("erro", "Falha de Leitura", f"Erro:\n{str(e)}")
@@ -781,7 +973,13 @@ class FichasScreen(QWidget):
                     if linha_limpa:
                         linhas_texto.append(linha_limpa)
 
-            novos_campos = self._detectar_campos_a_partir_de_linhas(linhas_texto)
+            if not linhas_texto:
+                self.exibir_popup(
+                    "aviso", "PDF sem texto",
+                    "Este PDF parece ser uma imagem digitalizada. Use um PDF com texto selecionável ou monte o modelo manualmente.",
+                )
+                return
+            novos_campos = self._detectar_campos_melhorado(linhas_texto)
             self._aplicar_modelo_importado(novos_campos, file_path)
         except Exception as e:
             self.exibir_popup("erro", "Falha de Leitura", f"Erro ao ler o PDF:\n{str(e)}")

@@ -356,6 +356,14 @@ class PacientesScreen(QWidget):
         self.list_historico_fichas.setFixedHeight(75)
         self.list_historico_fichas.itemDoubleClicked.connect(self.abrir_ficha_historico_selecionada)
         right_layout.addWidget(self.list_historico_fichas)
+
+        self.btn_excluir_ficha = QPushButton("Excluir ficha selecionada")
+        self.btn_excluir_ficha.setStyleSheet(
+            "QPushButton { background-color: #fff7ed; color: #c2410c; border: 1px solid #fdba74; "
+            "border-radius: 6px; padding: 6px; font-weight: bold; }"
+        )
+        self.btn_excluir_ficha.clicked.connect(self.excluir_ficha_historico_selecionada)
+        right_layout.addWidget(self.btn_excluir_ficha)
         
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
@@ -583,6 +591,25 @@ class PacientesScreen(QWidget):
         dados = item.data(Qt.UserRole)
         if dados: 
             VisualizarFichaHistoricoDialog(dados[1], dados[2], dados[3], self).exec()
+
+    def excluir_ficha_historico_selecionada(self):
+        item = self.list_historico_fichas.currentItem()
+        if not item:
+            self.mostrar_alerta_seguro("warning", "Selecione uma ficha", "Clique na ficha que deseja excluir primeiro.")
+            return
+        dados = item.data(Qt.UserRole)
+        if not dados:
+            return
+        confirmar = QMessageBox.question(
+            self, "Excluir ficha", "A ficha será removida da lista, mas permanecerá preservada no histórico clínico.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirmar != QMessageBox.StandardButton.Yes:
+            return
+        if self.db.soft_delete_ficha(dados[0]):
+            self.carregar_historico_fichas_paciente(self.id_em_edicao)
+        else:
+            self.mostrar_alerta_seguro("error", "Não foi possível excluir", "A ficha não foi removida.")
 
     def filtrar_pacientes(self):
         texto = self.input_busca.text().lower().strip()
