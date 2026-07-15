@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
                                QPushButton, QStackedWidget, QLabel, QFrame)
 from PySide6.QtCore import Qt
@@ -23,6 +24,7 @@ class MainWindow(QMainWindow):
         
         # Recebe a conexão única do Supabase ativada no main.py
         self.db = database_instancia
+        self._ultima_atualizacao_tela = {}
 
         self.init_db_estruturas()
         self.pastas_sistema = self.carregar_pastas_sqlite()
@@ -155,6 +157,12 @@ class MainWindow(QMainWindow):
         botao_ativo.style().polish(botao_ativo)
 
         # --- Gatilhos de atualização por tela ---
+        agora = time.monotonic()
+        ultima = self._ultima_atualizacao_tela.get(indice, 0)
+        if agora - ultima < 2.0:
+            return
+        self._ultima_atualizacao_tela[indice] = agora
+
         if indice == 0:
             if hasattr(self.screen_home, 'renderizar_lista_pastas'):
                 self.screen_home.renderizar_lista_pastas()

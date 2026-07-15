@@ -88,7 +88,7 @@ class ConfiguracoesScreen(QWidget):
             QCheckBox { color: #334155; spacing: 8px; }
             QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #64748b; border-radius: 3px; background: #ffffff; }
             QCheckBox::indicator:checked { background: #0284c7; border-color: #0284c7; }
-            QPushButton { min-height: 34px; padding: 4px 12px; color: #ffffff; background-color: #0284c7; border: none; border-radius: 6px; font-weight: 600; }
+            QPushButton { min-height: 30px; padding: 3px 12px; color: #ffffff; background-color: #0284c7; border: none; border-radius: 6px; font-weight: 600; }
             QPushButton:hover { background-color: #0369a1; }
             QPushButton:disabled { background-color: #94a3b8; }
         """)
@@ -109,6 +109,7 @@ class ConfiguracoesScreen(QWidget):
         self.input_backup_dir.setToolTip("Clique para escolher onde os backups serao guardados")
         self.input_backup_dir.mousePressEvent = self._abrir_seletor_pasta_backup
         btn_escolher_pasta = QPushButton("Escolher...")
+        btn_escolher_pasta.setFixedWidth(100)
         btn_escolher_pasta.clicked.connect(self._escolher_pasta_backup)
         pasta_row.addWidget(self.input_backup_dir)
         pasta_row.addWidget(btn_escolher_pasta)
@@ -118,12 +119,13 @@ class ConfiguracoesScreen(QWidget):
         freq_row.addWidget(QLabel("Frequência:"))
         self.combo_backup_freq = QComboBox()
         self.combo_backup_freq.addItems(["manual", "diaria", "semanal"])
+        self.combo_backup_freq.setFixedWidth(120)
         freq_row.addWidget(self.combo_backup_freq)
         freq_row.addWidget(QLabel("Retenção (dias):"))
         self.input_retencao = QSpinBox()
         self.input_retencao.setRange(1, 3650)
         self.input_retencao.setValue(30)
-        self.input_retencao.setFixedWidth(60)
+        self.input_retencao.setFixedWidth(90)
         freq_row.addWidget(self.input_retencao)
         freq_row.addStretch()
         backup_layout.addLayout(freq_row)
@@ -146,14 +148,20 @@ class ConfiguracoesScreen(QWidget):
 
         btn_backup_row = QHBoxLayout()
         self.btn_backup_agora = QPushButton("Executar backup agora")
+        self.btn_backup_agora.setFixedWidth(155)
         self.btn_backup_agora.clicked.connect(self._executar_backup_manual)
         self.btn_restaurar = QPushButton("Restaurar backup...")
+        self.btn_restaurar.setFixedWidth(140)
         self.btn_restaurar.clicked.connect(self._restaurar_backup)
         self.btn_desativar = QPushButton("Desativar dispositivo")
+        self.btn_desativar.setFixedWidth(155)
+        self.btn_desativar.setStyleSheet(
+            "QPushButton { background-color: #ffffff; color: #b91c1c; border: 1px solid #fca5a5; } "
+            "QPushButton:hover { background-color: #fef2f2; }"
+        )
         self.btn_desativar.clicked.connect(self._desativar_dispositivo)
         btn_backup_row.addWidget(self.btn_backup_agora)
         btn_backup_row.addWidget(self.btn_restaurar)
-        btn_backup_row.addStretch()
         btn_backup_row.addWidget(self.btn_desativar)
         backup_layout.addLayout(btn_backup_row)
 

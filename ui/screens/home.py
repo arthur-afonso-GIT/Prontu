@@ -162,9 +162,10 @@ class HomeScreen(QWidget):
                 
         lista_pastas = getattr(self.window_principal, 'pastas_sistema', ["Geral"])
         cores_pastas = getattr(self.window_principal, 'pastas_cores', {})
+        pacientes = self._buscar_pacientes_para_home()
         
         for nome_pasta in lista_pastas:
-            qtd_pacientes = self.contar_pacientes_na_pasta_supabase(nome_pasta)
+            qtd_pacientes = self._contar_pacientes_na_lista(pacientes, nome_pasta)
             cor_pasta = cores_pastas.get(nome_pasta, "#0284c7")
             
             card = CardPasta(
@@ -178,7 +179,37 @@ class HomeScreen(QWidget):
             )
             self.pastas_grid_layout.addWidget(card)
             
-        self.carregar_dados_iniciais()
+        self.carregar_dados_iniciais(pacientes)
+
+    def _buscar_pacientes_para_home(self):
+        """Uma única consulta atende os cards de pastas e a lista de recentes."""
+        if not self.db.supabase:
+            return []
+        try:
+            resposta = self.db.supabase.table("pacientes")\
+                .select("id, nome, pasta")\
+                .eq("consultorio_id", self.db.consultorio_id)\
+                .is_("deleted_at", "null")\
+                .order("id", desc=True)\
+                .execute()
+            return resposta.data or []
+        except Exception as e:
+            print(f"Erro ao carregar pacientes da home: {e}")
+            return []
+
+    @staticmethod
+    def _contar_pacientes_na_lista(pacientes, nome_pasta):
+        nome_limpo = nome_pasta.strip().lower()
+        if nome_limpo == "geral":
+            return sum(
+                1 for paciente in pacientes
+                if not (paciente.get("pasta") or "").strip()
+                or (paciente.get("pasta") or "").strip().lower() == "geral"
+            )
+        return sum(
+            1 for paciente in pacientes
+            if (paciente.get("pasta") or "").strip().lower() == nome_limpo
+        )
 
     def acao_mudar_cor_pasta(self, nome_pasta):
         """Abre o seletor de cores do sistema e salva a nova cor da pasta."""
@@ -224,25 +255,21 @@ class HomeScreen(QWidget):
         if paciente_id is not None and hasattr(self.window_principal, 'abrir_paciente_especifico'):
             self.window_principal.abrir_paciente_especifico(paciente_id)
 
-    def carregar_dados_iniciais(self):
+    def carregar_dados_iniciais(self, pacientes=None):
         if not self.db.supabase:
             return
         try:
             self.table_recentes.setRowCount(0)
             
             # 1. Total de Pacientes e preenchimento dos Recentes
-            resposta_pacientes = self.db.supabase.table("pacientes")\
-                .select("id, nome, pasta")\
-                .eq("consultorio_id", self.db.consultorio_id)\
-                .is_("deleted_at", "null")\
-                .order("id", desc=True)\
-                .execute()
-                
-            total_p = len(resposta_pacientes.data) if resposta_pacientes.data else 0
+            if pacientes is None:
+                pacientes = self._buscar_pacientes_para_home()
+
+            total_p = len(pacientes)
             self.card_pacientes.set_valor(str(total_p))
             
             # Exibe os últimos 4 adicionados
-            ultimos_pacientes = resposta_pacientes.data[:4] if resposta_pacientes.data else []
+            ultimos_pacientes = pacientes[:4]
             for row_idx, item in enumerate(ultimos_pacientes):
                 self.table_recentes.insertRow(row_idx)
                 item_nome = QTableWidgetItem(str(item["nome"]).upper())
