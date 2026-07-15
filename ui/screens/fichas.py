@@ -4,13 +4,15 @@ import uuid
 import mimetypes
 import re
 import unicodedata
+import html
 from datetime import datetime
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QComboBox, QScrollArea, 
                                QFrame, QCheckBox, QTextEdit, QFileDialog, QMessageBox, QListView, QDialog,
                                QDateEdit, QRadioButton, QButtonGroup, QCompleter)
-from PySide6.QtGui import QPixmap, QDesktopServices, QColor, QDoubleValidator
+from PySide6.QtGui import QPixmap, QDesktopServices, QColor, QDoubleValidator, QTextDocument
 from PySide6.QtCore import Qt, QUrl, QDate
+from PySide6.QtPrintSupport import QPrinter
 
 try:
     from docx import Document
@@ -234,6 +236,22 @@ class FichasScreen(QWidget):
         """)
         self.btn_salvar_atendimento.clicked.connect(self.salvar_ficha_preenchida)
         self.left_layout.addWidget(self.btn_salvar_atendimento)
+
+        exportacoes_layout = QHBoxLayout()
+        exportacoes_layout.setSpacing(6)
+        self.btn_exportar_word = QPushButton("Exportar Word")
+        self.btn_exportar_pdf = QPushButton("Exportar PDF")
+        for botao in (self.btn_exportar_word, self.btn_exportar_pdf):
+            botao.setStyleSheet(
+                "QPushButton { background: #f1f5f9; color: #1e3a8a; border: 1px solid #bfdbfe; "
+                "border-radius: 6px; padding: 7px; font-weight: bold; font-size: 12px; } "
+                "QPushButton:hover { background: #dbeafe; }"
+            )
+        self.btn_exportar_word.clicked.connect(self.exportar_ficha_word)
+        self.btn_exportar_pdf.clicked.connect(self.exportar_ficha_pdf)
+        exportacoes_layout.addWidget(self.btn_exportar_word)
+        exportacoes_layout.addWidget(self.btn_exportar_pdf)
+        self.left_layout.addLayout(exportacoes_layout)
 
         self.btn_cancelar_edicao = QPushButton("Cancelar edição da ficha")
         self.btn_cancelar_edicao.setVisible(False)
@@ -1319,6 +1337,138 @@ class FichasScreen(QWidget):
 
         self.dinamic_form_layout.addStretch()
         self.scroll_content.adjustSize()
+
+    def _dados_para_exportacao(self):
+        paciente = self.combo_paciente.currentText().strip()
+        if not paciente or not self.combo_paciente.currentData():
+            self.exibir_popup("aviso", "Selecione o paciente", "Selecione um paciente antes de exportar a ficha.")
+            return None
+
+        rotulos = {campo.get("id"): campo.get("label", campo.get("id", "")) for campo in self.modelo_atual_campos}
+        respostas = []
+        for campo_id, (tipo, widget) in self.widgets_dinamicos.items():
+            if tipo in ("texto_curto", "numero"):
+                valor = widget.text().strip()
+            elif tipo == "texto_longo":
+                valor = widget.toPlainText().strip()
+            elif tipo == "checkbox":
+                valor = "Sim" if widget.isChecked() else "Não"
+            elif tipo == "data":
+                valor = widget.date().toString("dd/MM/yyyy")
+            elif tipo == "multipla_escolha":
+                marcado = widget.checkedButton()
+                valor = marcado.text() if marcado else ""
+            else:
+                valor = ""
+            if valor:
+                respostas.append((rotulos.get(campo_id, campo_id.replace("_", " ").capitalize()), valor))
+
+        profissional = self.db.obter_nome_profissional() if hasattr(self.db, "obter_nome_profissional") else ""
+        clinica = getattr(getattr(self.db, "session_manager", None), "nome_clinica", None) or "Prontu"
+        return {
+            "paciente": paciente,
+            "modelo": self.combo_modelo.currentText() or "Ficha Clínica",
+            "data": datetime.now().strftime("%d/%m/%Y às %H:%M"),
+            "clinica": clinica,
+            "profissional": profissional,
+            "respostas": respostas,
+        }
+
+    @staticmethod
+    def _nome_arquivo_exportacao(dados, extensao):
+        nome = re.sub(r"[^A-Za-z0-9_-]+", "_", dados["paciente"].strip())
+        return f"Ficha_{nome}_{datetime.now().strftime('%Y%m%d_%H%M')}{extensao}"
+
+    def exportar_ficha_word(self):
+        dados = self._dados_para_exportacao()
+        if not dados:
+            return
+        if not DOCX_DISPONIVEL or Document is None:
+            self.exibir_popup("erro", "Word indisponível", "A biblioteca python-docx não está instalada.")
+            return
+        sugestao = self._nome_arquivo_exportacao(dados, ".docx")
+        caminho, _ = QFileDialog.getSaveFileName(self, "Salvar ficha em Word", sugestao, "Documento Word (*.docx)")
+        if not caminho:
+            return
+        try:
+            from docx.shared import Inches, Pt, RGBColor
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+            documento = Document()
+            secao = documento.sections[0]
+            secao.top_margin = Inches(0.65)
+            secao.bottom_margin = Inches(0.65)
+            cabecalho = documento.add_table(rows=1, cols=2)
+            cabecalho.columns[0].width = Inches(0.8)
+            celula_logo, celula_texto = cabecalho.rows[0].cells
+            logo = os.path.join(os.path.dirname(__file__), "..", "assets", "prontu_logo.png")
+            if os.path.exists(logo):
+                celula_logo.paragraphs[0].add_run().add_picture(logo, width=Inches(0.48))
+            paragrafo = celula_texto.paragraphs[0]
+            paragrafo.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            run = paragrafo.add_run(dados["clinica"])
+            run.bold = True
+            run.font.size = Pt(12)
+            run.font.color.rgb = RGBColor(2, 132, 199)
+
+            titulo = documento.add_heading(dados["modelo"], level=0)
+            titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            documento.add_paragraph(f"Paciente: {dados['paciente']}")
+            documento.add_paragraph(f"Data de emissão: {dados['data']}")
+            if dados["profissional"]:
+                documento.add_paragraph(f"Profissional: {dados['profissional']}")
+            documento.add_paragraph("─" * 55)
+            for rotulo, valor in dados["respostas"]:
+                documento.add_heading(rotulo, level=2)
+                documento.add_paragraph(valor)
+            documento.add_paragraph("\nDocumento gerado pelo Prontu.")
+            documento.save(caminho)
+            self.lbl_status_operacao.setText("Ficha exportada em Word com sucesso.")
+        except Exception as e:
+            self.exibir_popup("erro", "Erro ao exportar", f"Não foi possível criar o Word.\n{e}")
+
+    def exportar_ficha_pdf(self):
+        dados = self._dados_para_exportacao()
+        if not dados:
+            return
+        sugestao = self._nome_arquivo_exportacao(dados, ".pdf")
+        caminho, _ = QFileDialog.getSaveFileName(self, "Salvar ficha em PDF", sugestao, "Documento PDF (*.pdf)")
+        if not caminho:
+            return
+        try:
+            campos_html = "".join(
+                f"<section><h2>{html.escape(rotulo)}</h2><p>{html.escape(str(valor)).replace(chr(10), '<br>')}</p></section>"
+                for rotulo, valor in dados["respostas"]
+            ) or "<p>Nenhuma resposta preenchida.</p>"
+            profissional_html = f"<p><strong>Profissional:</strong> {html.escape(dados['profissional'])}</p>" if dados["profissional"] else ""
+            conteudo = f"""
+                <html><head><style>
+                    body {{ font-family: Arial; color: #1e293b; font-size: 10.5pt; }}
+                    .cabecalho {{ border-bottom: 2px solid #0284c7; padding-bottom: 12px; }}
+                    h1 {{ color: #0f172a; font-size: 19pt; margin: 18px 0 8px; }}
+                    h2 {{ color: #0284c7; font-size: 12pt; margin: 18px 0 5px; }}
+                    p {{ line-height: 1.4; margin: 4px 0; }}
+                    section {{ border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; }}
+                    .rodape {{ color: #64748b; font-size: 8pt; margin-top: 24px; }}
+                </style></head><body>
+                    <div class='cabecalho'><strong>{html.escape(dados['clinica'])}</strong></div>
+                    <h1>{html.escape(dados['modelo'])}</h1>
+                    <p><strong>Paciente:</strong> {html.escape(dados['paciente'])}</p>
+                    <p><strong>Data de emissão:</strong> {html.escape(dados['data'])}</p>
+                    {profissional_html}
+                    {campos_html}
+                    <p class='rodape'>Documento gerado pelo Prontu.</p>
+                </body></html>
+            """
+            documento = QTextDocument()
+            documento.setHtml(conteudo)
+            impressora = QPrinter(QPrinter.PrinterMode.HighResolution)
+            impressora.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+            impressora.setOutputFileName(caminho)
+            documento.print_(impressora)
+            self.lbl_status_operacao.setText("Ficha exportada em PDF com sucesso.")
+        except Exception as e:
+            self.exibir_popup("erro", "Erro ao exportar", f"Não foi possível criar o PDF.\n{e}")
 
     def salvar_ficha_preenchida(self):
         if self.modo_criacao:

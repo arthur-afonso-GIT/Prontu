@@ -1,146 +1,98 @@
-# 🩺 Prontu
+# Prontu
 
-> A modern desktop Electronic Health Record (EHR) and Clinic Management System built with **Python** and **PySide6**.
+<p align="center">
+  <img src="ui/assets/prontu_logo.png" alt="Prontu logo" width="120">
+</p>
 
-Prontu is a desktop application designed to simplify clinic operations by providing an intuitive interface for patient management, appointment scheduling, electronic medical records, and document organization. The project emphasizes clean architecture, modular development, and a modern user experience.
+<p align="center">
+  <strong>Intelligent clinic management for desktop.</strong><br>
+  A focused workspace for patient care, appointments, clinical records, payments, and professional documents.
+</p>
 
 ---
 
-## 📸 Screenshots
+## Overview
+
+Prontu is a desktop application designed to simplify the daily workflow of a healthcare practice. It keeps the most important information in one place: patients, clinical records, agenda, financial follow-up, documents, and encrypted backups.
+
+The product is built as a desktop-first experience and is intended to be delivered through a Windows installer in production, without asking the end user to configure Python or a database.
+
+## Highlights
+
+- **Patient management** — organized profiles, specialty folders, clinical history, and quick search.
+- **Clinical records** — fill, edit, save, review, and export patient records from reusable templates.
+- **Template builder** — create custom record models with sections and input fields, with a live preview.
+- **Smart agenda** — schedule appointments, avoid time conflicts, update appointment status, and open a record directly from an appointment.
+- **Financial follow-up** — appointments appear automatically in the payment panel; track received, pending, and overdue payments with clear visual status.
+- **Professional exports** — generate Word and PDF documents with patient and appointment information.
+- **Encrypted local backup** — configure a destination folder, backup retention, metadata inclusion, and a recovery password.
+- **Multi-clinic isolation** — clinic data is separated by `consultorio_id`, so each activated clinic works only with its own data.
+
+## Screenshots
 
 ### Dashboard
 
-<img width="1911" height="1012" alt="image" src="https://github.com/user-attachments/assets/c7a48279-db26-4805-ae0b-90f08282f9ce" />
+![Prontu dashboard]![alt text](image-1.png)
 
+### Patient management
 
----
+![Prontu patient management](https://github.com/user-attachments/assets/bb5a25cb-3897-464d-a310-a28c8173e11d)
 
-### Patient Management
+### Clinical records
 
-<img width="1913" height="1012" alt="image" src="https://github.com/user-attachments/assets/8d257bb3-73bc-4b25-98a5-bc234f960881" />
+![Prontu clinical records](https://github.com/user-attachments/assets/8dbbb8e6-6cf5-4f4a-9f61-7f1c5d2950b0)
 
+### Appointment scheduling
 
----
+![Prontu appointment scheduling](![alt text](image.png))
 
-### Medical Record
+### Financial tracking
 
-<img width="1918" height="1017" alt="image" src="https://github.com/user-attachments/assets/89025ca7-75c7-467b-b33d-c74254a00f27" />
+![Prontu financial tracking](docs/screenshots/finance-dashboard.png)
 
+## Technology stack
 
----
+| Area | Technologies |
+| --- | --- |
+| Desktop application | Python 3.11, PySide6 (Qt for Python) |
+| Cloud data | Supabase, PostgreSQL, Row Level Security |
+| Secure activation | Supabase Edge Functions, TypeScript / Deno |
+| Documents | python-docx, PySide6 Qt Print Support, pypdf |
+| Local security | cryptography, keyring |
+| Connectivity and configuration | httpx, python-dotenv |
+| Windows distribution | PyInstaller-ready desktop application, designed for installer delivery |
 
-### Appointment Scheduling
-
-<img width="1918" height="1012" alt="image" src="https://github.com/user-attachments/assets/181d7780-2fc8-42f8-bfb5-ceccd579735e" />
-
-
----
-
-### Settings
-
-<img width="1917" height="1018" alt="image" src="https://github.com/user-attachments/assets/b933984f-3959-4582-8fc1-ea958c46c60a" />
-
-
----
-
-## ✨ Features
-
-* Patient registration and management
-* Electronic medical records (EHR)
-* Appointment scheduling
-* Document attachment management
-* Search and filtering
-* SQLite database integration
-* Modern desktop interface built with PySide6
-* Modular project architecture
-
----
-
-## 🛠️ Tech Stack
-
-| Category        | Technologies            |
-| --------------- | ----------------------- |
-| Language        | Python                  |
-| GUI             | PySide6 (Qt for Python) |
-| Database        | SQLite                  |
-| Version Control | Git & GitHub            |
-| Design          | Qt Designer             |
-
----
-
-## 📁 Project Structure
+## Architecture
 
 ```text
-prontu/
-│
-├── assets/
-├── database/
-├── docs/
-│   └── images/
-├── src/
-│   ├── models/
-│   ├── views/
-│   ├── controllers/
-│   ├── database/
-│   ├── services/
-│   └── utils/
-│
-├── main.py
-├── requirements.txt
-└── README.md
+Prontu
+├── main.py                 Application entry point
+├── database/               Supabase access, session and secure local storage
+├── ui/
+│   ├── main_window.py      Navigation shell and shared application behavior
+│   ├── screens/            Dashboard, patients, agenda, records, finance and settings
+│   └── assets/             Product branding and visual assets
+├── supabase/
+│   ├── migrations/         PostgreSQL schema, policies and database evolution
+│   └── functions/          Secure device-activation API
+└── tests/                  Automated regression checks
 ```
 
----
+The desktop interface communicates with Supabase through a small Python data layer. Database migrations define the PostgreSQL structure and data policies, while the Edge Function handles sensitive device activation without exposing privileged database credentials in the app.
 
-## 🚀 Getting Started
+## Data and security
 
-Clone the repository
+- Every clinic operates within its own data scope.
+- Supabase policies reinforce clinic-level access control.
+- Device activation validates the application key before opening the workspace.
+- Session data and local secrets are stored securely on the device.
+- Local backups are encrypted and can be protected with a recovery password.
 
-```bash
-git clone https://github.com/arthur-afonso-GIT/prontu.git
-```
+## Product direction
 
-Navigate to the project
+Prontu is evolving toward a polished Windows product for small healthcare practices, with installer-based delivery, richer clinical workflows, reliable cloud synchronization, and clear financial visibility.
 
-```bash
-cd prontu
-```
+## Author
 
-Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-Run the application
-
-```bash
-python main.py
-```
-
----
-
-## 🎯 Project Goals
-
-The main objective of Prontu is to demonstrate the development of a complete desktop healthcare management system using Python. The project focuses on software architecture, graphical user interface design, data persistence, and real-world business logic.
-
----
-
-## 📌 Future Improvements
-
-* User authentication
-* Cloud synchronization
-* Multi-user support
-* Report generation
-* Data backup and restore
-* Dashboard analytics
-* AI-assisted medical documentation
-
----
-
-## 👨‍💻 Author
-
-**Arthur Florêncio Afonso**
-
-* LinkedIn: https://www.linkedin.com/in/arthur-flor%C3%AAncio-afonso/
-* GitHub: https://github.com/arthur-afonso-GIT
+**Arthur Florencio Afonso**
+[GitHub](https://github.com/arthurflorencio) · [LinkedIn](https://www.linkedin.com/in/arthur-florencio-afonso/)

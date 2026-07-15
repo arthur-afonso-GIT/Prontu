@@ -9,6 +9,7 @@ from PySide6.QtGui import QIcon, QPixmap
 from ui.screens.home import HomeScreen
 from ui.screens.pacientes import PacientesScreen
 from ui.screens.agenda import AgendaScreen 
+from ui.screens.financeiro import FinanceiroScreen
 from ui.screens.configuracoes import ConfiguracoesScreen
 
 try:
@@ -101,7 +102,8 @@ class MainWindow(QMainWindow):
         self.btn_fichas = QPushButton(" 📝 Fichas Clínicas")
         self.btn_config = QPushButton(" ⚙️ Configurações")
         
-        self.botoes_menu = [self.btn_home, self.btn_pacientes, self.btn_agenda, self.btn_fichas, self.btn_config]
+        self.btn_financeiro = QPushButton(" 💰 Financeiro")
+        self.botoes_menu = [self.btn_home, self.btn_pacientes, self.btn_agenda, self.btn_fichas, self.btn_financeiro, self.btn_config]
         
         for btn in self.botoes_menu:
             sidebar_layout.addWidget(btn)
@@ -130,6 +132,7 @@ class MainWindow(QMainWindow):
         self.screen_pacientes = PacientesScreen(self.db)
         self.screen_agenda = AgendaScreen(self.db)
         self.screen_fichas = FichasScreen(self.db) if FichasScreen is not None else QWidget()
+        self.screen_financeiro = FinanceiroScreen(self.db)
         self.screen_pacientes.window_principal = self
         self.screen_agenda.window_principal = self
         if hasattr(self.screen_fichas, "__dict__"):
@@ -146,6 +149,8 @@ class MainWindow(QMainWindow):
         
         # Sincroniza a lista de pastas já carregada com o combobox de Pacientes
         # assim que a tela é criada, sem precisar esperar o usuário trocar de aba.
+        self.painel_telas.addWidget(self.screen_financeiro)
+
         if hasattr(self.screen_pacientes, 'atualizar_combobox_pastas'):
             self.screen_pacientes.atualizar_combobox_pastas(self.pastas_sistema)
         self.screen_pacientes.pastas_cores = self.pastas_cores
@@ -158,6 +163,7 @@ class MainWindow(QMainWindow):
         self.btn_agenda.clicked.connect(lambda: self.mudar_tela(2, self.btn_agenda))
         self.btn_fichas.clicked.connect(lambda: self.mudar_tela(3, self.btn_fichas))
         self.btn_config.clicked.connect(lambda: self.mudar_tela(4, self.btn_config))
+        self.btn_financeiro.clicked.connect(lambda: self.mudar_tela(5, self.btn_financeiro))
         
         # Define a tela padrão inicial (Home)
         self.mudar_tela(0, self.btn_home)
@@ -214,6 +220,9 @@ class MainWindow(QMainWindow):
         elif indice == 4:
             if hasattr(self.screen_config, 'carregar_dados_configurados'):
                 self.screen_config.carregar_dados_configurados()
+        elif indice == 5:
+            if hasattr(self.screen_financeiro, 'carregar_dados'):
+                self.screen_financeiro.carregar_dados()
 
     def navegar_para_novo_paciente(self):
         """Callback do botão 'Novo Paciente' da Home: limpa o formulário e vai para a aba de Pacientes."""
