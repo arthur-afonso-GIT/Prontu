@@ -8,7 +8,7 @@ from datetime import datetime
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QComboBox, QScrollArea, 
                                QFrame, QCheckBox, QTextEdit, QFileDialog, QMessageBox, QListView, QDialog,
-                               QDateEdit, QRadioButton, QButtonGroup)
+                               QDateEdit, QRadioButton, QButtonGroup, QCompleter)
 from PySide6.QtGui import QPixmap, QDesktopServices, QColor, QDoubleValidator
 from PySide6.QtCore import Qt, QUrl, QDate
 
@@ -91,6 +91,9 @@ class FichasScreen(QWidget):
         self.widgets_dinamicos = {}   
         self.modo_criacao = False 
         self._nome_modelo_importado = None
+        self.ficha_em_edicao_id = None
+        self._data_atendimento_original = None
+        self._anexos_existentes = []
         self.arquivos_anexados = []  # Lista de caminhos locais pendentes de upload (limpa após salvar)
         
         self.main_layout = QHBoxLayout(self)
@@ -133,6 +136,15 @@ class FichasScreen(QWidget):
         self.combo_paciente = QComboBox()
         self.combo_paciente.setView(QListView())
         self.combo_paciente.view().setStyleSheet("QListView { background-color: #ffffff !important; color: #0f172a !important; selection-background-color: #0284c7; }")
+        self.combo_paciente.setEditable(True)
+        self.combo_paciente.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.combo_paciente.lineEdit().setPlaceholderText("Digite o nome do paciente...")
+        self.combo_paciente.lineEdit().setClearButtonEnabled(True)
+        self.busca_paciente = QCompleter(self.combo_paciente.model(), self.combo_paciente)
+        self.busca_paciente.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.busca_paciente.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.busca_paciente.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self.combo_paciente.setCompleter(self.busca_paciente)
         self.left_layout.addWidget(self.combo_paciente)
         
         self.left_layout.addWidget(QLabel("2. Modelo de Ficha Clínica:"))
@@ -222,6 +234,14 @@ class FichasScreen(QWidget):
         """)
         self.btn_salvar_atendimento.clicked.connect(self.salvar_ficha_preenchida)
         self.left_layout.addWidget(self.btn_salvar_atendimento)
+
+        self.btn_cancelar_edicao = QPushButton("Cancelar edição da ficha")
+        self.btn_cancelar_edicao.setVisible(False)
+        self.btn_cancelar_edicao.setStyleSheet(
+            "QPushButton { background-color: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; padding: 7px; font-weight: bold; border-radius: 6px; }"
+        )
+        self.btn_cancelar_edicao.clicked.connect(self.cancelar_edicao_ficha)
+        self.left_layout.addWidget(self.btn_cancelar_edicao)
 
         self.lbl_status_operacao = QLabel("")
         self.lbl_status_operacao.setWordWrap(True)
@@ -1093,6 +1113,108 @@ class FichasScreen(QWidget):
 
         return lista_metadados
 
+    def abrir_ficha_para_edicao(self, ficha_id):
+        """Abre uma ficha existente no formulário original, já preenchida."""
+        if not self.db.supabase:
+            return False
+        try:
+            # O Supabase usa bigint para este campo; garante que a sessão não
+            # deixe o identificador como texto ao restaurar dados locais.
+            self.db.consultorio_id = int(self.db.consultorio_id)
+            resposta = self.db.supabase.table("fichas_preenchidas").select(
+                "id, paciente_id, modelo_nome, dados_respostas, data_atendimento, anexos"
+            ).eq("id", ficha_id).eq("consultorio_id", self.db.consultorio_id).is_(
+                "deleted_at", "null"
+            ).execute()
+            if not resposta.data:
+                self.exibir_popup("erro", "Ficha não encontrada", "Essa ficha não está mais disponível para edição.")
+                return False
+            ficha = resposta.data[0]
+
+            self.carregar_pacientes_combo()
+            self.carregar_modelos_iniciais_combo()
+            indice_paciente = self.combo_paciente.findData(ficha["paciente_id"])
+            if indice_paciente >= 0:
+                self.combo_paciente.setCurrentIndex(indice_paciente)
+
+            try:
+                respostas = ficha["dados_respostas"] if isinstance(ficha["dados_respostas"], dict) else json.loads(ficha["dados_respostas"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                respostas = {}
+
+            nome_modelo = ficha.get("modelo_nome") or "Ficha de Consulta Geral (Padrão)"
+            if "Padrão" in nome_modelo:
+                self.combo_modelo.setCurrentText("Ficha de Consulta Geral (Padrão)")
+                self.gerar_modelo_padrao()
+            else:
+                modelo = self.db.supabase.table("modelos_fichas").select("estrutura_json").eq(
+                    "consultorio_id", self.db.consultorio_id
+                ).eq("nome_modelo", nome_modelo).execute()
+                if modelo.data:
+                    estrutura = modelo.data[0]["estrutura_json"]
+                    self.modelo_atual_campos = estrutura if isinstance(estrutura, list) else json.loads(estrutura)
+                    self.combo_modelo.setCurrentText(nome_modelo)
+                else:
+                    self.modelo_atual_campos = self._campos_recuperados(respostas)
+                self.renderizar_formulario_dinamico()
+
+            self._preencher_formulario_com_respostas(respostas)
+            self.ficha_em_edicao_id = ficha["id"]
+            self._data_atendimento_original = ficha.get("data_atendimento")
+            anexos = ficha.get("anexos") or []
+            self._anexos_existentes = anexos if isinstance(anexos, list) else json.loads(anexos)
+            self.arquivos_anexados = []
+            self.combo_paciente.setEnabled(False)
+            self.combo_modelo.setEnabled(False)
+            self.btn_salvar_atendimento.setText("Salvar alterações da ficha")
+            self.btn_cancelar_edicao.setVisible(True)
+            self.lbl_status_operacao.setText("Editando ficha existente. O paciente e o modelo foram preservados.")
+            return True
+        except Exception as e:
+            print(f"Erro ao abrir ficha para edição: {e}")
+            self.exibir_popup("erro", "Não foi possível abrir", "Não foi possível preparar essa ficha para edição.")
+            return False
+
+    def _campos_recuperados(self, respostas):
+        campos = []
+        for campo_id, valor in respostas.items():
+            tipo = "checkbox" if isinstance(valor, bool) else "texto_longo"
+            label = campo_id.replace("custom_", "").replace("_", " ").capitalize()
+            campos.append({"tipo": tipo, "label": label, "id": campo_id})
+        return campos
+
+    def _preencher_formulario_com_respostas(self, respostas):
+        for campo_id, valor in respostas.items():
+            if campo_id not in self.widgets_dinamicos:
+                continue
+            tipo, widget = self.widgets_dinamicos[campo_id]
+            if tipo in ("texto_curto", "numero"):
+                widget.setText("" if valor is None else str(valor))
+            elif tipo == "texto_longo":
+                widget.setPlainText("" if valor is None else str(valor))
+            elif tipo == "checkbox":
+                widget.setChecked(bool(valor))
+            elif tipo == "data":
+                data = QDate.fromString(str(valor), "dd/MM/yyyy")
+                if data.isValid():
+                    widget.setDate(data)
+            elif tipo == "multipla_escolha":
+                for botao in widget.buttons():
+                    if botao.text() == str(valor):
+                        botao.setChecked(True)
+                        break
+
+    def cancelar_edicao_ficha(self):
+        self.ficha_em_edicao_id = None
+        self._data_atendimento_original = None
+        self._anexos_existentes = []
+        self.combo_paciente.setEnabled(True)
+        self.combo_modelo.setEnabled(True)
+        self.btn_salvar_atendimento.setText("Salvar Ficha Preenchida")
+        self.btn_cancelar_edicao.setVisible(False)
+        self.lbl_status_operacao.setText("Edição cancelada. Você pode iniciar uma nova ficha.")
+        self.gerar_modelo_padrao()
+
     def renderizar_formulario_dinamico(self):
         self.limpar_layout_completamente(self.dinamic_form_layout)
         self.widgets_dinamicos.clear()
@@ -1207,33 +1329,44 @@ class FichasScreen(QWidget):
                 botao_marcado = widget.checkedButton()
                 respostas[id_campo] = botao_marcado.text() if botao_marcado else ""
                 
-        string_respostas = json.dumps(respostas, ensure_ascii=False)
         modelo_nome = self.combo_modelo.currentText()
-        data_atual = datetime.now().strftime("%d/%m/%Y %H:%M")
+        data_atual = self._data_atendimento_original or datetime.now().strftime("%d/%m/%Y %H:%M")
         
         if not self.db.supabase:
             return
             
         try:
-            payload = {
-                "consultorio_id": self.db.consultorio_id,
-                "paciente_id": paciente_id,
-                "modelo_nome": modelo_nome,
-                "dados_respostas": string_respostas,
-                "data_atendimento": data_atual
-            }
-            
-            resposta_insert = self.db.supabase.table("fichas_preenchidas").insert(payload).execute()
+            # A API recebe estes campos como bigint no Supabase. A conversão
+            # aqui evita que IDs restaurados como texto quebrem o salvamento.
+            consultorio_id = int(self.db.consultorio_id)
+            paciente_id = int(paciente_id)
+            ficha_em_edicao_id = int(self.ficha_em_edicao_id) if self.ficha_em_edicao_id is not None else None
+            editando_ficha = ficha_em_edicao_id is not None
+            if editando_ficha:
+                # Edição não altera os vínculos da ficha: atualiza somente as respostas.
+                self.db.supabase.table("fichas_preenchidas").update(
+                    {"dados_respostas": respostas}
+                ).eq("id", ficha_em_edicao_id).execute()
+                ficha_id = ficha_em_edicao_id
+            else:
+                payload = {
+                    "consultorio_id": consultorio_id,
+                    "paciente_id": paciente_id,
+                    "modelo_nome": modelo_nome,
+                    "dados_respostas": respostas,
+                    "data_atendimento": data_atual,
+                }
+                resposta_insert = self.db.supabase.table("fichas_preenchidas").insert(payload).execute()
+                ficha_id = resposta_insert.data[0]["id"] if resposta_insert.data else None
 
             # Se houver fotos/PDFs pendentes, envia agora para o Storage e vincula à ficha recém-criada
-            if self.arquivos_anexados and resposta_insert.data:
-                ficha_id = resposta_insert.data[0]["id"]
+            if self.arquivos_anexados and ficha_id:
                 metadados_anexos = self._fazer_upload_anexos(paciente_id)
                 if metadados_anexos:
+                    anexos_finais = self._anexos_existentes + metadados_anexos
                     self.db.supabase.table("fichas_preenchidas")\
-                        .update({"anexos": json.dumps(metadados_anexos, ensure_ascii=False)})\
+                        .update({"anexos": json.dumps(anexos_finais, ensure_ascii=False)})\
                         .eq("id", ficha_id)\
-                        .eq("consultorio_id", self.db.consultorio_id)\
                         .execute()
             
             # Limpa os campos após salvar com sucesso
@@ -1249,6 +1382,14 @@ class FichasScreen(QWidget):
             self.renderizar_anexos_thumbnails()
             self._formulario_sujo = False
                 
-            self.exibir_popup("info", "Ficha Salva", "O atendimento foi registrado com sucesso!")
+            if editando_ficha:
+                self.cancelar_edicao_ficha()
+                janela = getattr(self, "window_principal", None)
+                tela_pacientes = getattr(janela, "screen_pacientes", None) if janela else None
+                if tela_pacientes and tela_pacientes.id_em_edicao == paciente_id:
+                    tela_pacientes.carregar_historico_fichas_paciente(paciente_id)
+                self.exibir_popup("info", "Ficha atualizada", "As alterações foram salvas no atendimento original.")
+            else:
+                self.exibir_popup("info", "Ficha Salva", "O atendimento foi registrado com sucesso!")
         except Exception as e:
             self.exibir_popup("erro", "Erro", f"Falha no banco de dados:\n{str(e)}")

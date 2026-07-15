@@ -130,6 +130,9 @@ class MainWindow(QMainWindow):
         self.screen_pacientes = PacientesScreen(self.db)
         self.screen_agenda = AgendaScreen(self.db)
         self.screen_fichas = FichasScreen(self.db) if FichasScreen is not None else QWidget()
+        self.screen_pacientes.window_principal = self
+        if hasattr(self.screen_fichas, "__dict__"):
+            self.screen_fichas.window_principal = self
         # ConfiguracoesScreen também precisa da JANELA PRINCIPAL (self), não do banco,
         # para conseguir chamar self.screen_home.atualizar_saudacao_dinamica() ao salvar.
         self.screen_config = ConfiguracoesScreen(window_principal=self)
@@ -158,7 +161,7 @@ class MainWindow(QMainWindow):
         # Define a tela padrão inicial (Home)
         self.mudar_tela(0, self.btn_home)
 
-    def mudar_tela(self, indice, botao_ativo):
+    def mudar_tela(self, indice, botao_ativo, atualizar=True):
         """Muda o painel visível, atualiza o estado visual do botão selecionado
         e dispara o refresh de dados da tela que acabou de ficar visível —
         garantindo que cada aba sempre mostre dados atuais do banco."""
@@ -174,6 +177,9 @@ class MainWindow(QMainWindow):
         botao_ativo.style().polish(botao_ativo)
 
         # --- Gatilhos de atualização por tela ---
+        if not atualizar:
+            return
+
         agora = time.monotonic()
         ultima = self._ultima_atualizacao_tela.get(indice, 0)
         if agora - ultima < 2.0:
@@ -213,6 +219,15 @@ class MainWindow(QMainWindow):
         if hasattr(self.screen_pacientes, 'limpar_formulario'):
             self.screen_pacientes.limpar_formulario()
         self.mudar_tela(1, self.btn_pacientes)
+
+    def editar_ficha_preenchida(self, ficha_id):
+        """Navega para a ficha e a abre após a atualização visual da tela."""
+        self.mudar_tela(3, self.btn_fichas, atualizar=False)
+        QTimer.singleShot(
+            0,
+            lambda: self.screen_fichas.abrir_ficha_para_edicao(ficha_id)
+            if hasattr(self.screen_fichas, "abrir_ficha_para_edicao") else None,
+        )
 
     def abrir_paciente_especifico(self, paciente_id):
         """Vai para a aba Pacientes e já abre o prontuário de um paciente específico

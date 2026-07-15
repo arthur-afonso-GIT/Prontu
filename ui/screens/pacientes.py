@@ -4,7 +4,7 @@ import json
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, 
                                QComboBox, QDateEdit, QHeaderView, QFrame, QTextEdit, QMessageBox, 
-                               QListWidget, QListWidgetItem, QDialog)
+                               QListWidget, QListWidgetItem, QDialog, QScrollArea)
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor
 
@@ -34,7 +34,7 @@ class VisualizarFichaHistoricoDialog(QDialog):
         
         texto_formatado = ""
         try:
-            respostas = json.loads(dados_respostas)
+            respostas = dados_respostas if isinstance(dados_respostas, dict) else json.loads(dados_respostas)
             if respostas:
                 for campo, valor in respostas.items():
                     campo_nome = campo.replace("custom_", "").replace("_", " ").upper()
@@ -52,6 +52,80 @@ class VisualizarFichaHistoricoDialog(QDialog):
         btn_fechar.setStyleSheet("QPushButton { background-color: #0284c7; color: white; padding: 8px; border-radius: 6px; font-weight: bold; border: none; } QPushButton:hover { background-color: #0369a1; }")
         btn_fechar.clicked.connect(self.accept)
         layout.addWidget(btn_fechar)
+
+
+class EditarFichaHistoricoDialog(QDialog):
+    """Edição simples e segura das respostas de uma ficha já registrada."""
+    def __init__(self, titulo_ficha, dados_respostas, ao_salvar, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Editar ficha: {titulo_ficha}")
+        self.setMinimumSize(560, 520)
+        self._ao_salvar = ao_salvar
+        self._campos = {}
+
+        try:
+            self._respostas = dados_respostas if isinstance(dados_respostas, dict) else json.loads(dados_respostas)
+        except (TypeError, json.JSONDecodeError):
+            self._respostas = {}
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        titulo = QLabel(f"Editar respostas — {titulo_ficha}")
+        titulo.setStyleSheet("font-size: 17px; font-weight: bold; color: #0f172a;")
+        explicacao = QLabel("Altere somente o que for necessário e clique em Salvar alterações.")
+        explicacao.setStyleSheet("color: #64748b; font-size: 12px;")
+        layout.addWidget(titulo)
+        layout.addWidget(explicacao)
+
+        area_rolagem = QScrollArea()
+        area_rolagem.setWidgetResizable(True)
+        area_rolagem.setStyleSheet("QScrollArea { border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; }")
+        conteudo = QWidget()
+        campos_layout = QVBoxLayout(conteudo)
+        campos_layout.setContentsMargins(14, 14, 14, 14)
+        campos_layout.setSpacing(10)
+
+        if not self._respostas:
+            campos_layout.addWidget(QLabel("Esta ficha não possui respostas para editar."))
+        for campo, valor in self._respostas.items():
+            nome_legivel = campo.replace("custom_", "").replace("_", " ").capitalize()
+            campos_layout.addWidget(QLabel(nome_legivel))
+            if isinstance(valor, bool):
+                entrada = QComboBox()
+                entrada.addItem("Sim", True)
+                entrada.addItem("Não", False)
+                entrada.setCurrentIndex(0 if valor else 1)
+                entrada.setStyleSheet("QComboBox { padding: 7px; background: white; border: 1px solid #cbd5e1; border-radius: 6px; }")
+            else:
+                entrada = QTextEdit()
+                entrada.setPlainText("" if valor is None else str(valor))
+                entrada.setFixedHeight(64)
+                entrada.setStyleSheet("QTextEdit { padding: 7px; background: white; border: 1px solid #cbd5e1; border-radius: 6px; }")
+            self._campos[campo] = entrada
+            campos_layout.addWidget(entrada)
+        campos_layout.addStretch()
+        area_rolagem.setWidget(conteudo)
+        layout.addWidget(area_rolagem)
+
+        botoes = QHBoxLayout()
+        btn_cancelar = QPushButton("Cancelar")
+        btn_cancelar.clicked.connect(self.reject)
+        btn_salvar = QPushButton("Salvar alterações")
+        btn_salvar.setStyleSheet("QPushButton { background: #0284c7; color: white; border: none; border-radius: 6px; padding: 9px 16px; font-weight: bold; } QPushButton:hover { background: #0369a1; }")
+        btn_salvar.clicked.connect(self.salvar)
+        botoes.addStretch()
+        botoes.addWidget(btn_cancelar)
+        botoes.addWidget(btn_salvar)
+        layout.addLayout(botoes)
+
+    def salvar(self):
+        respostas_atualizadas = {}
+        for campo, entrada in self._campos.items():
+            respostas_atualizadas[campo] = entrada.currentData() if isinstance(entrada, QComboBox) else entrada.toPlainText().strip()
+        if self._ao_salvar(respostas_atualizadas):
+            self.accept()
 
 
 class PacientesScreen(QWidget):
@@ -353,9 +427,29 @@ class PacientesScreen(QWidget):
                 border-radius: 4px; 
             }
         """)
-        self.list_historico_fichas.setFixedHeight(75)
+        self.list_historico_fichas.setFixedHeight(115)
+        self.list_historico_fichas.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.list_historico_fichas.setToolTip("Use a roda do mouse ou a barra lateral para ver fichas mais antigas.")
         self.list_historico_fichas.itemDoubleClicked.connect(self.abrir_ficha_historico_selecionada)
         right_layout.addWidget(self.list_historico_fichas)
+
+        acoes_historico = QHBoxLayout()
+        acoes_historico.setSpacing(6)
+        self.btn_abrir_ficha = QPushButton("Abrir")
+        self.btn_abrir_ficha.setStyleSheet(
+            "QPushButton { background-color: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd; "
+            "border-radius: 6px; padding: 6px; font-weight: bold; }"
+        )
+        self.btn_abrir_ficha.clicked.connect(self.abrir_ficha_historico_atual)
+        acoes_historico.addWidget(self.btn_abrir_ficha)
+
+        self.btn_editar_ficha = QPushButton("Editar")
+        self.btn_editar_ficha.setStyleSheet(
+            "QPushButton { background-color: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; "
+            "border-radius: 6px; padding: 6px; font-weight: bold; }"
+        )
+        self.btn_editar_ficha.clicked.connect(self.editar_ficha_historico_selecionada)
+        acoes_historico.addWidget(self.btn_editar_ficha)
 
         self.btn_excluir_ficha = QPushButton("Excluir ficha selecionada")
         self.btn_excluir_ficha.setStyleSheet(
@@ -363,7 +457,8 @@ class PacientesScreen(QWidget):
             "border-radius: 6px; padding: 6px; font-weight: bold; }"
         )
         self.btn_excluir_ficha.clicked.connect(self.excluir_ficha_historico_selecionada)
-        right_layout.addWidget(self.btn_excluir_ficha)
+        acoes_historico.addWidget(self.btn_excluir_ficha)
+        right_layout.addLayout(acoes_historico)
         
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
@@ -591,6 +686,36 @@ class PacientesScreen(QWidget):
         dados = item.data(Qt.UserRole)
         if dados: 
             VisualizarFichaHistoricoDialog(dados[1], dados[2], dados[3], self).exec()
+
+    def abrir_ficha_historico_atual(self):
+        item = self.list_historico_fichas.currentItem()
+        if not item:
+            self.mostrar_alerta_seguro("warning", "Selecione uma ficha", "Clique na ficha que deseja abrir primeiro.")
+            return
+        self.abrir_ficha_historico_selecionada(item)
+
+    def editar_ficha_historico_selecionada(self):
+        item = self.list_historico_fichas.currentItem()
+        if not item:
+            self.mostrar_alerta_seguro("warning", "Selecione uma ficha", "Clique na ficha que deseja editar primeiro.")
+            return
+        dados = item.data(Qt.UserRole)
+        if not dados:
+            return
+
+        janela = getattr(self, "window_principal", None)
+        if janela and hasattr(janela, "editar_ficha_preenchida"):
+            janela.editar_ficha_preenchida(dados[0])
+            return
+
+        def salvar_respostas(respostas_atualizadas):
+            if self.db.atualizar_respostas_ficha(dados[0], respostas_atualizadas):
+                self.carregar_historico_fichas_paciente(self.id_em_edicao)
+                return True
+            self.mostrar_alerta_seguro("error", "Não foi possível salvar", "As alterações da ficha não foram salvas.")
+            return False
+
+        EditarFichaHistoricoDialog(dados[1], dados[3], salvar_respostas, self).exec()
 
     def excluir_ficha_historico_selecionada(self):
         item = self.list_historico_fichas.currentItem()

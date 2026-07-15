@@ -380,21 +380,6 @@ class Database:
         """Exclusão lógica — preserva dados clínicos."""
         if not self.supabase or self.consultorio_id is None:
             return False
-
-    def soft_delete_ficha(self, ficha_id: int) -> bool:
-        """Remove uma ficha da visualização sem apagar seu histórico clínico."""
-        if not self.supabase or self.consultorio_id is None:
-            return False
-        try:
-            from datetime import datetime, timezone
-
-            self.supabase.table("fichas_preenchidas").update(
-                {"deleted_at": datetime.now(timezone.utc).isoformat()}
-            ).eq("id", ficha_id).eq("consultorio_id", self.consultorio_id).execute()
-            return True
-        except Exception as e:
-            print(f"Erro ao excluir ficha: {e}")
-            return False
         try:
             from datetime import datetime, timezone
 
@@ -410,4 +395,32 @@ class Database:
             return True
         except Exception as e:
             print(f"Erro ao excluir paciente (soft delete): {e}")
+            return False
+
+    def soft_delete_ficha(self, ficha_id: int) -> bool:
+        """Remove uma ficha da visualização sem apagar seu histórico clínico."""
+        if not self.supabase or self.consultorio_id is None:
+            return False
+        try:
+            from datetime import datetime, timezone
+
+            self.supabase.table("fichas_preenchidas").update(
+                {"deleted_at": datetime.now(timezone.utc).isoformat()}
+            ).eq("id", ficha_id).eq("consultorio_id", self.consultorio_id).execute()
+            return True
+        except Exception as e:
+            print(f"Erro ao excluir ficha: {e}")
+            return False
+
+    def atualizar_respostas_ficha(self, ficha_id: int, dados_respostas: dict) -> bool:
+        """Atualiza apenas as respostas de uma ficha do consultório ativo."""
+        if not self.supabase or self.consultorio_id is None:
+            return False
+        try:
+            self.supabase.table("fichas_preenchidas").update(
+                {"dados_respostas": dados_respostas}
+            ).eq("id", ficha_id).eq("consultorio_id", self.consultorio_id).execute()
+            return True
+        except Exception as e:
+            print(f"Erro ao atualizar ficha: {e}")
             return False
