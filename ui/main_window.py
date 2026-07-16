@@ -8,9 +8,11 @@ from PySide6.QtGui import QIcon, QPixmap
 
 from ui.screens.home import HomeScreen
 from ui.screens.pacientes import PacientesScreen, normalizar_nome_pasta
+from ui.screens.pacientes_secretaria import SecretariaPacientesScreen
 from ui.screens.agenda import AgendaScreen 
 from ui.screens.financeiro import FinanceiroScreen
 from ui.screens.configuracoes import ConfiguracoesScreen
+from ui.screens.equipe import EquipeScreen
 
 try:
     from ui.screens.fichas import FichasScreen
@@ -103,7 +105,8 @@ class MainWindow(QMainWindow):
         self.btn_config = QPushButton(" ⚙️ Configurações")
         
         self.btn_financeiro = QPushButton(" 💰 Financeiro")
-        self.botoes_menu = [self.btn_home, self.btn_pacientes, self.btn_agenda, self.btn_fichas, self.btn_financeiro, self.btn_config]
+        self.btn_equipe = QPushButton("Equipe")
+        self.botoes_menu = [self.btn_home, self.btn_pacientes, self.btn_agenda, self.btn_fichas, self.btn_financeiro, self.btn_equipe, self.btn_config]
         
         for btn in self.botoes_menu:
             sidebar_layout.addWidget(btn)
@@ -128,11 +131,17 @@ class MainWindow(QMainWindow):
             on_novo_paciente_click=self.navegar_para_novo_paciente,
             on_pasta_click=self.filtrar_pacientes_por_pasta,
             on_agendar_retorno_click=self.agendar_retorno_do_painel,
+            on_consulta_click=self.abrir_consulta_da_home,
         )
-        self.screen_pacientes = PacientesScreen(self.db)
+        self.screen_pacientes = (
+            SecretariaPacientesScreen(self.db)
+            if self.db.obter_papel_atual() == "secretaria"
+            else PacientesScreen(self.db)
+        )
         self.screen_agenda = AgendaScreen(self.db)
         self.screen_fichas = FichasScreen(self.db) if FichasScreen is not None else QWidget()
         self.screen_financeiro = FinanceiroScreen(self.db)
+        self.screen_equipe = EquipeScreen(self.db)
         self.screen_pacientes.window_principal = self
         self.screen_agenda.window_principal = self
         if hasattr(self.screen_fichas, "__dict__"):
@@ -150,6 +159,7 @@ class MainWindow(QMainWindow):
         # Sincroniza a lista de pastas já carregada com o combobox de Pacientes
         # assim que a tela é criada, sem precisar esperar o usuário trocar de aba.
         self.painel_telas.addWidget(self.screen_financeiro)
+        self.painel_telas.addWidget(self.screen_equipe)
 
         if hasattr(self.screen_pacientes, 'atualizar_combobox_pastas'):
             self.screen_pacientes.atualizar_combobox_pastas(self.pastas_sistema)
@@ -164,10 +174,23 @@ class MainWindow(QMainWindow):
         self.btn_fichas.clicked.connect(lambda: self.mudar_tela(3, self.btn_fichas))
         self.btn_config.clicked.connect(lambda: self.mudar_tela(4, self.btn_config))
         self.btn_financeiro.clicked.connect(lambda: self.mudar_tela(5, self.btn_financeiro))
+        self.btn_equipe.clicked.connect(lambda: self.mudar_tela(6, self.btn_equipe))
         
         # Define a tela padrão inicial (Home)
-        self.mudar_tela(0, self.btn_home)
+        self.atualizar_permissoes_menu()
+        if self.db.obter_papel_atual() == "secretaria":
+            self.mudar_tela(2, self.btn_agenda)
+        else:
+            self.mudar_tela(0, self.btn_home)
         self.atualizar_status_sessao()
+
+    def atualizar_permissoes_menu(self):
+        """Oculta atalhos incompatíveis; o Supabase continua validando o acesso."""
+        papel = self.db.obter_papel_atual()
+        self.btn_equipe.setVisible(self.db.possui_recurso("equipe") and papel == "proprietario")
+        self.btn_home.setVisible(papel != "secretaria")
+        self.btn_fichas.setVisible(papel != "secretaria")
+        self.btn_config.setVisible(papel == "proprietario")
 
     def atualizar_status_sessao(self):
         """Exibe somente um estado que o aplicativo consegue afirmar com segurança."""
@@ -279,6 +302,9 @@ class MainWindow(QMainWindow):
         elif indice == 5:
             if hasattr(self.screen_financeiro, 'carregar_dados'):
                 self.screen_financeiro.carregar_dados()
+        elif indice == 6:
+            if hasattr(self.screen_equipe, 'carregar_dados'):
+                self.screen_equipe.carregar_dados()
 
     def navegar_para_novo_paciente(self):
         """Callback do botão 'Novo Paciente' da Home: limpa o formulário e vai para a aba de Pacientes."""
@@ -313,6 +339,17 @@ class MainWindow(QMainWindow):
             0,
             lambda: self.screen_agenda.preencher_agendamento_retorno(retorno)
             if hasattr(self.screen_agenda, "preencher_agendamento_retorno") else None,
+        )
+
+    def abrir_consulta_da_home(self, consulta):
+        """Abre a Agenda já posicionada no dia e horário clicados no Painel."""
+        self.mudar_tela(2, self.btn_agenda, atualizar=False)
+        if self.painel_telas.currentIndex() != 2:
+            return
+        QTimer.singleShot(
+            0,
+            lambda: self.screen_agenda.abrir_consulta_por_data_hora(consulta)
+            if hasattr(self.screen_agenda, "abrir_consulta_por_data_hora") else None,
         )
 
     def abrir_paciente_especifico(self, paciente_id):

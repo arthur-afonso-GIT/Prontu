@@ -207,6 +207,32 @@ class ConfiguracoesScreen(QWidget):
         lbl_subtitulo = QLabel("Personalize os dados do aplicativo que serão exibidos nas telas e relatórios.")
         lbl_subtitulo.setStyleSheet("font-size: 14px; color: #64748b; margin-bottom: 10px;")
         main_layout.addWidget(lbl_subtitulo)
+
+        # --- RESUMO DO PLANO ---
+        container_assinatura = QFrame()
+        container_assinatura.setStyleSheet("""
+            QFrame { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; }
+            QLabel { border: none; }
+        """)
+        assinatura_layout = QHBoxLayout(container_assinatura)
+        assinatura_layout.setContentsMargins(18, 12, 18, 12)
+        assinatura_layout.setSpacing(10)
+        titulo_assinatura = QLabel("Plano atual")
+        titulo_assinatura.setStyleSheet("font-size: 13px; font-weight: bold; color: #475569;")
+        assinatura_layout.addWidget(titulo_assinatura)
+        self.lbl_plano_atual = QLabel("Prontu Solo")
+        self.lbl_plano_atual.setStyleSheet("font-size: 15px; font-weight: bold; color: #0f172a;")
+        assinatura_layout.addWidget(self.lbl_plano_atual)
+        assinatura_layout.addStretch()
+        self.lbl_status_assinatura = QLabel("Assinatura ativa")
+        self.lbl_status_assinatura.setStyleSheet(
+            "background: #dcfce7; color: #15803d; border-radius: 12px; padding: 5px 10px; font-size: 12px; font-weight: bold;"
+        )
+        assinatura_layout.addWidget(self.lbl_status_assinatura)
+        self.lbl_limite_assinatura = QLabel("")
+        self.lbl_limite_assinatura.setStyleSheet("font-size: 12px; color: #64748b;")
+        assinatura_layout.addWidget(self.lbl_limite_assinatura)
+        main_layout.addWidget(container_assinatura)
         
         # --- PAINEL DE PERFIL DO PROFISSIONAL ---
         container_perfil = QFrame()
@@ -490,6 +516,7 @@ class ConfiguracoesScreen(QWidget):
         """Busca do banco de dados e preenche os campos."""
         if not self.db:
             return
+        self.atualizar_cartao_assinatura()
         defaults = {
             "nome_profissional": "",
             "backup_dir": self._pasta_backup_padrao,
@@ -532,6 +559,42 @@ class ConfiguracoesScreen(QWidget):
             )
         elif err:
             self.lbl_backup_status.setText(f"Erro no último backup: {err[:120]}")
+
+    def atualizar_cartao_assinatura(self):
+        """Mostra o plano atual sem expor chave, tokens ou dados administrativos."""
+        if not self.db or not hasattr(self.db, "obter_resumo_assinatura"):
+            return
+        dados = self.db.obter_resumo_assinatura() or {}
+        plano = str(dados.get("plano") or "solo").lower()
+        nomes_planos = {
+            "solo": "Prontu Solo",
+            "equipe": "Prontu Equipe",
+            "personalizado": "Prontu Personalizado",
+        }
+        status = str(dados.get("status") or "ativa").lower()
+        nomes_status = {
+            "ativa": "Assinatura ativa",
+            "teste": "Período de teste",
+            "suspensa": "Assinatura suspensa",
+            "cancelada": "Assinatura cancelada",
+        }
+        cores_status = {
+            "ativa": ("#dcfce7", "#15803d"),
+            "teste": ("#fef3c7", "#b45309"),
+            "suspensa": ("#fee2e2", "#b91c1c"),
+            "cancelada": ("#fee2e2", "#b91c1c"),
+        }
+        fundo, cor = cores_status.get(status, ("#e2e8f0", "#475569"))
+        self.lbl_plano_atual.setText(nomes_planos.get(plano, "Prontu Solo"))
+        self.lbl_status_assinatura.setText(nomes_status.get(status, "Status não informado"))
+        self.lbl_status_assinatura.setStyleSheet(
+            f"background: {fundo}; color: {cor}; border-radius: 12px; padding: 5px 10px; font-size: 12px; font-weight: bold;"
+        )
+        max_usuarios = dados.get("max_usuarios") or 1
+        if plano == "solo":
+            self.lbl_limite_assinatura.setText("1 usuário")
+        else:
+            self.lbl_limite_assinatura.setText(f"Até {max_usuarios} usuários")
 
     def salvar_configuracoes(self):
         """Grava as alterações e avisa a Home que ela precisa se atualizar."""

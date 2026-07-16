@@ -6,13 +6,14 @@ from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor
 from ui.screens.pacientes import normalizar_nome_pasta
 class HomeScreen(QWidget):
-    def __init__(self, window_principal, on_novo_paciente_click=None, on_pasta_click=None, on_agendar_retorno_click=None):
+    def __init__(self, window_principal, on_novo_paciente_click=None, on_pasta_click=None, on_agendar_retorno_click=None, on_consulta_click=None):
         super().__init__()
         
         self.window_principal = window_principal
         self.on_novo_paciente_click = on_novo_paciente_click
         self.on_pasta_click = on_pasta_click
         self.on_agendar_retorno_click = on_agendar_retorno_click
+        self.on_consulta_click = on_consulta_click
         self.db = window_principal.db
         
         # Layout Principal
@@ -114,6 +115,7 @@ class HomeScreen(QWidget):
         h_agenda.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         h_agenda.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         h_agenda.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_agenda_resumo.cellDoubleClicked.connect(self.abrir_consulta_da_home)
         agenda_vbox.addWidget(self.table_agenda_resumo)
         split_tables_layout.addLayout(agenda_vbox, stretch=1)
 
@@ -339,7 +341,9 @@ class HomeScreen(QWidget):
             
             for r_idx, item in enumerate(eventos_hoje):
                 self.table_agenda_resumo.insertRow(r_idx)
-                self.table_agenda_resumo.setItem(r_idx, 0, QTableWidgetItem(str(item["horario"])))
+                item_hora = QTableWidgetItem(str(item["horario"]))
+                item_hora.setData(Qt.ItemDataRole.UserRole, {"data": hoje_iso, "horario": str(item["horario"])})
+                self.table_agenda_resumo.setItem(r_idx, 0, item_hora)
                 self.table_agenda_resumo.setItem(r_idx, 1, QTableWidgetItem(str(item["paciente"]).upper()))
                 self.table_agenda_resumo.setItem(r_idx, 2, QTableWidgetItem(str(item["status"] if item["status"] else "Agendado")))
 
@@ -366,6 +370,12 @@ class HomeScreen(QWidget):
                 self.table_retornos.setCellWidget(linha, 2, btn_agendar)
         except Exception as e:
             print(f"Erro ao inicializar tabelas reais da home: {e}")
+
+    def abrir_consulta_da_home(self, linha, _coluna):
+        item = self.table_agenda_resumo.item(linha, 0)
+        consulta = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if consulta and self.on_consulta_click:
+            self.on_consulta_click(consulta)
 
     def agendar_retorno(self, retorno):
         if self.on_agendar_retorno_click:

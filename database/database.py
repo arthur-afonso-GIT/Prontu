@@ -139,6 +139,41 @@ class Database:
             and self.consultorio_id is not None
         )
 
+    def obter_plano_atual(self) -> str:
+        """Retorna o plano da ativação atual. Por enquanto, todos usam Solo."""
+        if not self.session_manager:
+            return "solo"
+        return self.session_manager.plano
+
+    def possui_recurso(self, recurso: str) -> bool:
+        """Ponto único para liberar recursos futuros sem espalhar regras pela interface."""
+        plano = self.obter_plano_atual()
+        recursos = self.session_manager.recursos_extras if self.session_manager else []
+        if recurso in recursos:
+            return True
+        recursos_por_plano = {
+            "solo": set(),
+            "equipe": {"equipe", "controle_acesso", "base_compartilhada"},
+            "personalizado": {"equipe", "controle_acesso", "base_compartilhada", "personalizacoes"},
+        }
+        return recurso in recursos_por_plano.get(plano, set())
+
+    def obter_resumo_assinatura(self) -> dict:
+        """Dados seguros para exibição em Configurações; nunca expõe a chave."""
+        sessao = getattr(self.session_manager, "_session", None) or {}
+        return {
+            "plano": self.obter_plano_atual(),
+            "status": sessao.get("status_assinatura") or "ativa",
+            "expira_em": sessao.get("expira_em"),
+            "max_usuarios": sessao.get("max_usuarios") or 1,
+        }
+
+    def obter_papel_atual(self) -> str:
+        """Papel da pessoa autenticada; por compatibilidade sessões antigas são Proprietário."""
+        if not self.session_manager:
+            return "proprietario"
+        return self.session_manager.papel
+
     def validar_chave_acesso(self, chave_inserida: str) -> dict | None:
         """Ativa consultório via Edge Function segura (não consulta chaves_acesso diretamente)."""
         if not self.session_manager:
@@ -161,7 +196,99 @@ class Database:
         return {
             "consultorio_id": self.consultorio_id,
             "nome_clinica": resultado.get("nome_clinica"),
+            "plano": resultado.get("plano") or "solo",
         }
+
+    def entrar_com_email(self, email: str, senha: str, lembrar: bool = True) -> dict | None:
+        if not self.session_manager:
+            return None
+        try:
+            resultado = self.session_manager.login_with_email(email, senha, lembrar=lembrar)
+        except (ConnectionError, RuntimeError) as exc:
+            print(f"Aviso: login não concluído ({exc}).")
+            return None
+        self.consultorio_id = self.session_manager.consultorio_id
+        self._aplicar_sessao_no_cliente()
+        return resultado
+
+    def aceitar_convite_equipe(self, codigo: str, email: str, senha: str) -> dict | None:
+        if not self.session_manager:
+            return None
+        try:
+            resultado = self.session_manager.accept_invite(codigo, email, senha)
+        except (ConnectionError, RuntimeError) as exc:
+            print(f"Aviso: convite não aceito ({exc}).")
+            return None
+        self.consultorio_id = self.session_manager.consultorio_id
+        self._aplicar_sessao_no_cliente()
+        return resultado
+
+    def criar_login_proprietario(self, email: str, senha: str) -> dict | None:
+        if not self.session_manager:
+            return None
+        try:
+            resultado = self.session_manager.create_owner_login(email, senha)
+        except (ConnectionError, RuntimeError) as exc:
+            print(f"Aviso: login do proprietario nao criado ({exc}).")
+            return None
+        self.consultorio_id = self.session_manager.consultorio_id
+        self._aplicar_sessao_no_cliente()
+        return resultado
+
+    def solicitar_redefinicao_senha(self, email: str) -> bool:
+        if not self.session_manager:
+            return False
+        return self.session_manager.request_password_reset(email)
+
+    def listar_equipe(self) -> dict | None:
+        if not self.session_manager:
+            return None
+        try:
+            return self.session_manager.gerenciar_equipe("listar")
+        except (ConnectionError, RuntimeError) as exc:
+            print(f"Aviso: equipe indisponivel ({exc}).")
+            return None
+
+    def criar_convite_equipe(self, nome: str, email: str, papel: str) -> dict | None:
+        if not self.session_manager:
+            return None
+        try:
+            return self.session_manager.gerenciar_equipe(
+                "convidar", nome=nome, email=email, papel=papel
+            )
+        except (ConnectionError, RuntimeError) as exc:
+            print(f"Aviso: convite nao criado ({exc}).")
+            return None
+
+    def revogar_acesso_equipe(self, tipo: str, identificador: str) -> bool:
+        if not self.session_manager:
+            return False
+        try:
+            campo = "convite_id" if tipo == "convite" else "membro_id"
+            self.session_manager.gerenciar_equipe("revogar", **{campo: identificador})
+            return True
+        except (ConnectionError, RuntimeError) as exc:
+            print(f"Aviso: acesso nao revogado ({exc}).")
+            return False
+
+    def alterar_papel_equipe(self, membro_id: str, papel: str) -> bool:
+        if not self.session_manager:
+            return False
+        try:
+            self.session_manager.gerenciar_equipe("alterar_papel", membro_id=membro_id, papel=papel)
+            return True
+        except (ConnectionError, RuntimeError) as exc:
+            print(f"Aviso: papel nao alterado ({exc}).")
+            return False
+
+    def renovar_convite_equipe(self, convite_id: str) -> dict | None:
+        if not self.session_manager:
+            return None
+        try:
+            return self.session_manager.gerenciar_equipe("renovar_convite", convite_id=convite_id)
+        except (ConnectionError, RuntimeError) as exc:
+            print(f"Aviso: convite nao renovado ({exc}).")
+            return None
 
     def renovar_sessao_se_necessario(self) -> bool:
         if not self.session_manager:
@@ -470,6 +597,9 @@ class Database:
         if not self.supabase or self.consultorio_id is None:
             return []
         try:
+            if self.obter_papel_atual() == "secretaria":
+                resposta = self.supabase.rpc("listar_pacientes_secretaria", {"p_busca": None}).execute()
+                return [str(row.get("nome") or "") for row in (resposta.data or [])]
             resposta = (
                 self.supabase.table("pacientes")
                 .select("nome")
@@ -482,6 +612,41 @@ class Database:
         except Exception as e:
             print(f"Erro ao buscar nomes: {e}")
             return []
+
+    def listar_pacientes_secretaria(self, busca: str | None = None) -> list[dict]:
+        if not self.supabase or self.consultorio_id is None:
+            return []
+        try:
+            resposta = self.supabase.rpc("listar_pacientes_secretaria", {"p_busca": busca}).execute()
+            return resposta.data or []
+        except Exception as exc:
+            print(f"Erro ao listar pacientes básicos: {type(exc).__name__}.")
+            return []
+
+    def obter_paciente_secretaria(self, paciente_id: int) -> dict | None:
+        if not self.supabase:
+            return None
+        try:
+            resposta = self.supabase.rpc("obter_paciente_secretaria", {"p_paciente_id": int(paciente_id)}).execute()
+            return (resposta.data or [None])[0]
+        except Exception as exc:
+            print(f"Erro ao obter paciente básico: {type(exc).__name__}.")
+            return None
+
+    def salvar_paciente_secretaria(self, paciente_id: int | None, dados: dict) -> int | None:
+        if not self.supabase:
+            return None
+        try:
+            resposta = self.supabase.rpc("salvar_paciente_secretaria", {
+                "p_paciente_id": paciente_id,
+                "p_nome": dados.get("nome"), "p_telefone": dados.get("telefone"),
+                "p_nascimento": dados.get("nascimento"), "p_convenio": dados.get("convenio"),
+                "p_pasta": dados.get("pasta"), "p_sexo": dados.get("sexo"),
+            }).execute()
+            return int(resposta.data) if resposta.data is not None else None
+        except Exception as exc:
+            print(f"Erro ao salvar paciente básico: {type(exc).__name__}.")
+            return None
 
     def soft_delete_paciente(self, paciente_id: int) -> bool:
         """Exclusão lógica — preserva dados clínicos."""

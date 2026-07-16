@@ -8,8 +8,9 @@ load_dotenv(override=True)
 # Garante que o diretório atual está no PATH do Python
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox, QDialog
 from database import Database
+from ui.login_dialog import LoginDialog
 
 
 def _importar_main_window():
@@ -118,6 +119,11 @@ def inicializar_sistema():
     
     # Se não houver sessão autenticada, solicita a chave
     while not db.esta_autenticado():
+        dialogo = LoginDialog(db)
+        if dialogo.exec() != QDialog.DialogCode.Accepted:
+            sys.exit(0)
+        continue
+
         chave, ok = QInputDialog.getText(
             None, 
             "Ativação do Sistema — Prontu", 

@@ -739,6 +739,19 @@ class AgendaScreen(QWidget):
         self.renderizar_timeline_calendario()
         self._marcar_formulario_salvo()
 
+    def abrir_consulta_por_data_hora(self, consulta):
+        """Posiciona a Agenda no compromisso escolhido no Painel Principal."""
+        data = QDate.fromString(str(consulta.get("data") or ""), "dd/MM/yyyy")
+        if data.isValid():
+            self.data_visualizada = data
+        self.modo_visualizacao.setCurrentIndex(0)
+        hora = str(consulta.get("horario") or "")
+        if hora and self.input_hora.findText(hora) >= 0:
+            self.input_hora.setCurrentText(hora)
+        self.atualizar_visualizacao_data()
+        self.renderizar_timeline_calendario()
+        self._marcar_formulario_salvo()
+
     @staticmethod
     def _status_corresponde_ao_filtro(status, filtro):
         if not filtro:
@@ -893,6 +906,9 @@ class AgendaScreen(QWidget):
 
     def abrir_ficha_da_consulta(self, hora):
         """Localiza o paciente da consulta realizada e abre uma nova ficha."""
+        if getattr(self.db_gerenciador, "obter_papel_atual", lambda: "proprietario")() == "secretaria":
+            QMessageBox.information(self, "Acesso restrito", "A secretária não possui acesso a fichas clínicas.")
+            return
         str_data = self.data_visualizada.toString("dd/MM/yyyy")
         dados = self.db_agendamentos.get(str_data, {}).get(hora)
         if not dados or "Realizada" not in dados.get("status", ""):
