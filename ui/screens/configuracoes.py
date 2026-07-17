@@ -8,9 +8,28 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QSpinBox, QDialog, QTableWidget, QTableWidgetItem,
                                QHeaderView)
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction
 
 from services.backup_service import BackupService
 from services.backup_worker import BackupWorker
+
+
+def configurar_visibilidade_senha(campo: QLineEdit) -> None:
+    """Permite conferir uma senha sem deixá-la visível por padrão."""
+    campo.setEchoMode(QLineEdit.EchoMode.Password)
+    acao = QAction("Mostrar", campo)
+    campo.addAction(acao, QLineEdit.ActionPosition.TrailingPosition)
+    acao.setToolTip("Mostrar senha")
+
+    def alternar() -> None:
+        visivel = campo.echoMode() == QLineEdit.EchoMode.Password
+        campo.setEchoMode(
+            QLineEdit.EchoMode.Normal if visivel else QLineEdit.EchoMode.Password
+        )
+        acao.setText("Ocultar" if visivel else "Mostrar")
+        acao.setToolTip("Ocultar senha" if visivel else "Mostrar senha")
+
+    acao.triggered.connect(alternar)
 
 
 class HistoricoAuditoriaDialog(QDialog):
@@ -267,6 +286,9 @@ class ConfiguracoesScreen(QWidget):
             "QPushButton:hover { background-color: #dbeafe; }"
         )
         self.btn_auditoria.clicked.connect(self.abrir_historico_auditoria)
+        self.btn_auditoria.setVisible(
+            bool(self.db) and self.db.obter_papel_atual() == "proprietario"
+        )
         btn_layout.addWidget(self.btn_auditoria)
         btn_layout.addStretch()
         
@@ -344,7 +366,7 @@ class ConfiguracoesScreen(QWidget):
         senha_row = QHBoxLayout()
         senha_row.addWidget(QLabel("Senha de recuperação:"))
         self.input_backup_senha = QLineEdit()
-        self.input_backup_senha.setEchoMode(QLineEdit.EchoMode.Password)
+        configurar_visibilidade_senha(self.input_backup_senha)
         self.input_backup_senha.setPlaceholderText("Defina e confirme ao executar backup")
         senha_row.addWidget(self.input_backup_senha)
         backup_layout.addLayout(senha_row)
@@ -436,7 +458,11 @@ class ConfiguracoesScreen(QWidget):
 
         self.btn_backup_agora.setEnabled(False)
         self._backup_worker = BackupWorker(
-            self.db, dest, senha, include_attachments=self.chk_incluir_anexos.isChecked()
+            self.db,
+            dest,
+            senha,
+            include_attachments=self.chk_incluir_anexos.isChecked(),
+            retention_days=self.input_retencao.value(),
         )
         self._backup_worker.progress.connect(self._on_backup_progress)
         self._backup_worker.finished_ok.connect(self._on_backup_ok)
@@ -453,7 +479,9 @@ class ConfiguracoesScreen(QWidget):
             f"Último backup: {result.get('created_at', '')}\n"
             f"Arquivo: {result.get('filename', '')} ({size_kb} KB)"
         )
-        QMessageBox.information(self, "Backup concluído", "Backup criptografado gerado com sucesso.")
+        removidos = int(result.get("expired_removed") or 0)
+        detalhe = f"\n{removidos} backup(s) antigo(s) removido(s) pela retenção." if removidos else ""
+        QMessageBox.information(self, "Backup concluído", f"Backup criptografado gerado com sucesso.{detalhe}")
 
     def _on_backup_error(self, err: str):
         self.btn_backup_agora.setEnabled(True)
@@ -468,37 +496,104 @@ class ConfiguracoesScreen(QWidget):
         )
         if not path:
             return
-        senha, ok = QInputDialog.getText(
-            self, "Senha de recuperação", "Informe a senha do backup:", QLineEdit.EchoMode.Password
-        )
-        if not ok or not senha:
+        senha = self._solicitar_senha_backup()
+        if not senha:
             return
-        safe = QMessageBox.question(
-            self,
-            "Modo de restauração",
-            "Restaurar em modo seguro (não sobrescreve IDs existentes)?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        ) == QMessageBox.StandardButton.Yes
 
-        confirm = QMessageBox.warning(
-            self,
-            "Confirmação forte",
-            "Esta operação importará dados do backup. Deseja continuar?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        escolha = QMessageBox(self)
+        escolha.setWindowTitle("Modo de restauração")
+        escolha.setIcon(QMessageBox.Icon.Question)
+        escolha.setText("Como você deseja restaurar este backup?")
+        escolha.setInformativeText(
+            "Importar com segurança adiciona os dados do backup aos atuais. "
+            "Substituir remove os dados atuais deste consultório antes de restaurar o arquivo."
         )
-        if confirm != QMessageBox.StandardButton.Yes:
+        importar = escolha.addButton(
+            "Importar com segurança (recomendado)",
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        substituir = escolha.addButton(
+            "Substituir dados atuais", QMessageBox.ButtonRole.DestructiveRole
+        )
+        escolha.addButton(QMessageBox.StandardButton.Cancel)
+        escolha.exec()
+        botao_escolhido = escolha.clickedButton()
+        if botao_escolhido not in (importar, substituir):
             return
+
+        replace_existing = botao_escolhido is substituir
+        if replace_existing:
+            confirm = QMessageBox.warning(
+                self,
+                "Atenção: substituição de dados",
+                "Os pacientes, fichas, agenda, retornos, pagamentos, pastas, modelos e configurações atuais "
+                "deste consultório serão removidos e substituídos pelo backup.\n\n"
+                "Contas da equipe, convites, auditoria e arquivos já armazenados não são removidos.\n\n"
+                "Deseja continuar?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                return
+            texto, confirmado = QInputDialog.getText(
+                self,
+                "Confirmação final",
+                "Para confirmar, digite SUBSTITUIR:",
+            )
+            if not confirmado or texto.strip().upper() != "SUBSTITUIR":
+                QMessageBox.information(self, "Restauração cancelada", "Nenhum dado foi alterado.")
+                return
+        else:
+            confirm = QMessageBox.question(
+                self,
+                "Confirmar importação",
+                "Importar os dados do backup sem remover os dados atuais?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                return
 
         try:
             service = BackupService(self.db)
-            stats = service.restore_backup(path, senha, safe_mode=safe)
-            QMessageBox.information(
-                self, "Restauração",
+            stats = service.restore_backup(
+                path,
+                senha,
+                safe_mode=not replace_existing,
+                replace_existing=replace_existing,
+            )
+            resumo = (
                 f"Concluída. Inseridos: {stats['inserted']}, ignorados: {stats['skipped']}."
+            )
+            if replace_existing:
+                resumo += f" Registros removidos: {stats['removed']}."
+            QMessageBox.information(
+                self, "Restauração", resumo
             )
             self.carregar_dados_configurados()
         except Exception:
             QMessageBox.critical(self, "Restauração", "Falha na restauração. Verifique senha e arquivo.")
+
+    def _solicitar_senha_backup(self) -> str:
+        """Solicita a senha com opção de conferi-la antes de restaurar."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Senha de recuperação")
+        dialog.setMinimumWidth(360)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Informe a senha usada para criar este backup:"))
+        campo = QLineEdit()
+        configurar_visibilidade_senha(campo)
+        layout.addWidget(campo)
+        acoes = QHBoxLayout()
+        acoes.addStretch()
+        cancelar = QPushButton("Cancelar")
+        confirmar = QPushButton("Continuar")
+        cancelar.clicked.connect(dialog.reject)
+        confirmar.clicked.connect(dialog.accept)
+        acoes.addWidget(cancelar)
+        acoes.addWidget(confirmar)
+        layout.addLayout(acoes)
+        campo.returnPressed.connect(dialog.accept)
+        campo.setFocus()
+        return campo.text() if dialog.exec() == QDialog.DialogCode.Accepted else ""
 
     def _desativar_dispositivo(self):
         if not self.db:

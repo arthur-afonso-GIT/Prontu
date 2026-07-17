@@ -105,10 +105,18 @@ class HomeScreen(QWidget):
         self.table_agenda_resumo.setHorizontalHeaderLabels(["Horário", "Paciente", "Status"])
         self.table_agenda_resumo.verticalHeader().setVisible(False)
         self.table_agenda_resumo.setShowGrid(False)
+        self.table_agenda_resumo.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table_agenda_resumo.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table_agenda_resumo.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.table_agenda_resumo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.table_agenda_resumo.setMouseTracking(True)
+        self.table_agenda_resumo.viewport().setMouseTracking(True)
+        self.table_agenda_resumo.setCursor(Qt.CursorShape.PointingHandCursor)
         self.table_agenda_resumo.setFixedHeight(210)
         self.table_agenda_resumo.setStyleSheet("""
             QTableWidget { background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 13px; color: #334155; }
             QTableWidget::item { border-bottom: 1px solid #f1f5f9; padding: 6px; }
+            QTableWidget::item:hover { background-color: #eff6ff; color: #0369a1; }
             QHeaderView::section { background-color: #f8fafc; font-weight: bold; color: #64748b; border: none; padding: 6px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: left; }
         """)
         h_agenda = self.table_agenda_resumo.horizontalHeader()

@@ -17,6 +17,7 @@ class BackupWorker(QThread):
         dest_dir: str,
         password: str,
         include_attachments: bool = False,
+        retention_days: int | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -24,6 +25,7 @@ class BackupWorker(QThread):
         self.dest_dir = dest_dir
         self.password = password
         self.include_attachments = include_attachments
+        self.retention_days = retention_days
 
     def run(self):
         try:
@@ -32,6 +34,7 @@ class BackupWorker(QThread):
                 self.dest_dir,
                 self.password,
                 include_attachments=self.include_attachments,
+                retention_days=self.retention_days,
                 on_progress=lambda msg: self.progress.emit(msg),
             )
             BackupService.update_backup_status(self.db, result)

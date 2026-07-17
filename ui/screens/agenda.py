@@ -2,7 +2,7 @@ import json
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QComboBox, QFrame, 
                                QMessageBox, QCalendarWidget, QScrollArea,
-                               QHeaderView, QTableView, QCheckBox)
+                               QHeaderView, QTableView, QCheckBox, QCompleter)
 from PySide6.QtCore import Qt, QDate, QTime, QDateTime, QPoint
 from utils.operacao_segura import mensagem_erro_usuario, registrar_falha
 
@@ -183,13 +183,14 @@ class AgendaScreen(QWidget):
         self.input_paciente = QComboBox()
         self.input_paciente.setEditable(True)
         self.input_paciente.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        # Remove o autocompletar embutido do Qt: ele fazia inline-completion
-        # (sugeria e já deixava o restante do nome selecionado), o que
-        # atrapalhava continuar digitando ou apagar com backspace. A gente
-        # já filtra e mostra sugestões manualmente em filtrar_pacientes_ao_digitar.
-        self.input_paciente.setCompleter(None)
+        # Sugestoes em popup sem completar o texto por conta propria nem
+        # tirar o foco da pessoa enquanto ela ainda esta digitando.
+        self.completer_pacientes = QCompleter(self.input_paciente.model(), self.input_paciente)
+        self.completer_pacientes.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.completer_pacientes.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.completer_pacientes.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self.input_paciente.setCompleter(self.completer_pacientes)
         self.input_paciente.setPlaceholderText("Selecione ou digite para buscar...")
-        self.input_paciente.lineEdit().textEdited.connect(self.filtrar_pacientes_ao_digitar)
         form_layout.addWidget(self.input_paciente)
         
         tempo_layout = QHBoxLayout()
@@ -270,7 +271,7 @@ class AgendaScreen(QWidget):
             return
         try:
             resposta = self.db_gerenciador.supabase.table("agenda")\
-                .select("data, horario, paciente, status, procedimento, duracao_txt, observacao, tipo_bloco, slots_vinculados")\
+                .select("data, horario, paciente, status, procedimento, duracao_txt, observacao, tipo_bloco, slots_vinculados, retorno_id")\
                 .eq("consultorio_id", self.db_gerenciador.consultorio_id)\
                 .execute()
                 
@@ -288,6 +289,7 @@ class AgendaScreen(QWidget):
                         "procedimento": row["procedimento"],
                         "duracao_txt": row["duracao_txt"],
                         "observacao": row["observacao"],
+                        "retorno_id": row.get("retorno_id"),
                         "slots_vinculados": (
                             row["slots_vinculados"] if isinstance(row["slots_vinculados"], list)
                             else json.loads(row["slots_vinculados"]) if row["slots_vinculados"] else []
@@ -311,6 +313,7 @@ class AgendaScreen(QWidget):
                 "duracao_txt": dados_dict.get("duracao_txt", ""),
                 "observacao": dados_dict.get("observacao", ""),
                 "tipo_bloco": dados_dict.get("tipo_bloco", ""),
+                "retorno_id": dados_dict.get("retorno_id"),
                 "slots_vinculados": json.dumps(dados_dict.get("slots_vinculados", []))
             }
             tabela_agenda = self.db_gerenciador.supabase.table("agenda")
@@ -352,23 +355,8 @@ class AgendaScreen(QWidget):
         self.input_paciente.blockSignals(False)
 
     def filtrar_pacientes_ao_digitar(self, texto_digitado):
-        texto_norm = texto_digitado.strip().lower()
-        self.input_paciente.blockSignals(True)
-        self.input_paciente.clear()
-        
-        if not texto_norm:
-            self.input_paciente.addItems(self.lista_pacientes_disponiveis)
-            self.input_paciente.setCurrentIndex(-1)
-            self.input_paciente.setEditText("")
-        else:
-            filtrados = [p for p in self.lista_pacientes_disponiveis if texto_norm in p.lower()]
-            self.input_paciente.addItems(filtrados)
-            self.input_paciente.setCurrentIndex(-1)
-            self.input_paciente.setEditText(texto_digitado)
-            if filtrados:
-                self.input_paciente.showPopup()
-                
-        self.input_paciente.blockSignals(False)
+        """Mantido por compatibilidade; o QCompleter faz o filtro sem perder foco."""
+        return
 
     def abrir_mini_calendario(self):
         self.popup_calendario = QCalendarWidget()
@@ -844,6 +832,7 @@ class AgendaScreen(QWidget):
             "status": self.input_status.currentText(),
             "duracao_txt": self.input_duracao.currentText(),
             "observacao": self.input_obs.text().strip(),
+            "retorno_id": self._retorno_em_agendamento.get("id") if self._retorno_em_agendamento else None,
             "slots_vinculados": horarios_a_reservar
         }
         
@@ -868,6 +857,7 @@ class AgendaScreen(QWidget):
                 "procedimento": "",
                 "duracao_txt": "",
                 "observacao": "",
+                "retorno_id": None,
                 "slots_vinculados": []
             }
             self.db_agendamentos[str_data][slot_sequencia] = bloco_continua
@@ -900,9 +890,27 @@ class AgendaScreen(QWidget):
             return
         if dados.get("status") == novo_status:
             return
+        status_anterior = dados["status"]
         dados["status"] = novo_status
-        self.salvar_agendamento_no_db(str_data, hora, dados)
+        if not self.salvar_agendamento_no_db(str_data, hora, dados):
+            dados["status"] = status_anterior
+            QMessageBox.warning(self, "Status não atualizado", "Não foi possível salvar o novo status da consulta.")
+            return
+        self._sincronizar_retorno_da_consulta(dados, novo_status)
         self.renderizar_timeline_calendario()
+
+    def _sincronizar_retorno_da_consulta(self, dados, status_consulta):
+        """Mantem o retorno vinculado coerente com o destino da consulta."""
+        retorno_id = dados.get("retorno_id")
+        if not retorno_id or not hasattr(self.db_gerenciador, "atualizar_status_retorno"):
+            return
+        if "Realizada" in status_consulta:
+            novo_status = "Concluído"
+        elif "Cancelada" in status_consulta or "Faltou" in status_consulta:
+            novo_status = "Pendente"
+        else:
+            novo_status = "Agendado"
+        self.db_gerenciador.atualizar_status_retorno(retorno_id, novo_status)
 
     def abrir_ficha_da_consulta(self, hora):
         """Localiza o paciente da consulta realizada e abre uma nova ficha."""
@@ -947,6 +955,10 @@ class AgendaScreen(QWidget):
         msg.setStyleSheet("QMessageBox { background-color: #ffffff; } QLabel { color: #0f172a; font-size: 13px; } QPushButton { background-color: #e2e8f0; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px 15px; font-weight: bold; }")
         if msg.exec() != QMessageBox.StandardButton.Yes:
             return
+
+        # Uma consulta removida deixa o retorno disponível para novo agendamento.
+        if dados.get("retorno_id") and hasattr(self.db_gerenciador, "atualizar_status_retorno"):
+            self.db_gerenciador.atualizar_status_retorno(dados["retorno_id"], "Pendente")
 
         # Deleta todos os slots associados a essa consulta
         for slot in dados["slots_vinculados"]:

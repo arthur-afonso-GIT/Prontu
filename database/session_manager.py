@@ -123,8 +123,7 @@ class SessionManager:
             "papel": payload.get("papel") or "proprietario",
         }
         self._session = session
-        self.storage.save_session(session)
-        self._persist_session = True
+        self._persist_session = bool(self.storage.save_session(session))
         self.storage.mark_legacy_requires_revalidation()
         return session
 
@@ -210,9 +209,11 @@ class SessionManager:
             "recursos_extras": payload.get("recursos_extras") or [], "papel": payload.get("papel") or "proprietario",
         }
         self._session = session
-        self._persist_session = lembrar
+        self._persist_session = False
         if lembrar:
-            self.storage.save_session(session)
+            self._persist_session = bool(self.storage.save_session(session))
+            if not self._persist_session:
+                print("Aviso: sessão ativa, mas não foi possível salvá-la neste dispositivo.")
         else:
             self.storage.clear_session()
         return session

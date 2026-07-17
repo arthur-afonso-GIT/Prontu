@@ -1234,3 +1234,7 @@ class PacientesScreen(QWidget):
             self.combo_filtro_pasta.setCurrentText(pasta_atual_filtro)
         if self.input_pasta.findText(pasta_atual_input) != -1:
             self.input_pasta.setCurrentText(pasta_atual_input)
+        # Atualizar a lista de pastas pode mudar a selecao padrao do formulario.
+        # Isso e uma atualizacao interna, nao uma alteracao feita pelo usuario.
+        if self.id_em_edicao == -1:
+            self._marcar_formulario_salvo()

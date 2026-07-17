@@ -525,6 +525,10 @@ class FichasScreen(QWidget):
         acoes_layout.addStretch()
         acoes_layout.addWidget(btn_finalizar)
         self.dinamic_form_layout.addLayout(acoes_layout)
+        # Mantem o conteudo do construtor agrupado no topo; o espaco livre fica
+        # abaixo dos botoes, em vez de separar titulo, ferramentas e preview.
+        self.dinamic_form_layout.addStretch(1)
+        self.dinamic_form_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
         self.atualizar_visualizacao_preview()
 

@@ -167,13 +167,48 @@ class EquipeScreen(QWidget):
         except (TypeError, ValueError):
             return "Não informado"
 
+    @staticmethod
+    def _botao_acao(texto, tipo):
+        """Cria um botao de acao com dimensoes estaveis dentro da tabela."""
+        botao = QPushButton(texto)
+        botao.setCursor(Qt.CursorShape.PointingHandCursor)
+        botao.setFixedHeight(30)
+        botao.setMinimumWidth(132)
+        if tipo == "perigo":
+            botao.setStyleSheet(
+                "QPushButton { color: #b91c1c; background: #fef2f2; border: 1px solid #fca5a5; "
+                "border-radius: 6px; padding: 0 10px; font-weight: 700; font-size: 12px; } "
+                "QPushButton:hover { background: #fee2e2; }"
+            )
+        else:
+            botao.setStyleSheet(
+                "QPushButton { color: #0369a1; background: #eff6ff; border: 1px solid #93c5fd; "
+                "border-radius: 6px; padding: 0 10px; font-weight: 700; font-size: 12px; } "
+                "QPushButton:hover { background: #dbeafe; }"
+            )
+        return botao
+
+    @staticmethod
+    def _celula_acoes(*botoes):
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(8)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        for botao in botoes:
+            layout.addWidget(botao)
+        return container
+
     def carregar_dados(self):
         dados = self.db.listar_equipe()
         if not dados:
             self.lbl_limite.setText("Não foi possível carregar a equipe. Tente novamente.")
             self.lbl_limite.setStyleSheet("color: #b91c1c; font-weight: 600;")
             return
-        membros = dados.get("membros", [])
+        membros = [
+            membro for membro in dados.get("membros", [])
+            if not str(membro.get("email") or "").endswith("@prontu.device")
+        ]
         convites = dados.get("convites", [])
         limite = int(dados.get("max_usuarios") or 0)
         usados = len(membros) + len(convites)
@@ -191,20 +226,14 @@ class EquipeScreen(QWidget):
             if membro.get("papel") == "proprietario":
                 self.tabela_membros.setItem(linha, 3, QTableWidgetItem("Proprietário"))
             else:
-                acoes = QWidget()
-                layout = QHBoxLayout(acoes)
-                layout.setContentsMargins(4, 2, 4, 2)
-                alterar = QPushButton("Papel")
-                alterar.setMinimumWidth(68)
+                alterar = self._botao_acao("Alterar papel", "primario")
                 alterar.clicked.connect(lambda _, mid=membro.get("id"), atual=membro.get("papel"): self.alterar_papel(mid, atual))
-                revogar = QPushButton("Revogar")
-                revogar.setMinimumWidth(76)
+                revogar = self._botao_acao("Revogar acesso", "perigo")
                 revogar.clicked.connect(lambda _, mid=membro.get("id"): self.revogar("membro", mid))
-                layout.addWidget(alterar)
-                layout.addWidget(revogar)
-                self.tabela_membros.setCellWidget(linha, 3, acoes)
+                self.tabela_membros.setCellWidget(linha, 3, self._celula_acoes(alterar, revogar))
+            self.tabela_membros.setRowHeight(linha, 42)
         self.tabela_membros.resizeColumnsToContents()
-        self.tabela_membros.setColumnWidth(3, 180)
+        self.tabela_membros.setColumnWidth(3, 310)
 
     def _preencher_convites(self, convites):
         self.tabela_convites.setRowCount(len(convites))
@@ -213,20 +242,15 @@ class EquipeScreen(QWidget):
             self.tabela_convites.setItem(linha, 1, QTableWidgetItem(str(convite.get("email") or "")))
             self.tabela_convites.setItem(linha, 2, QTableWidgetItem(self._papel_texto(convite.get("papel"))))
             self.tabela_convites.setItem(linha, 3, QTableWidgetItem(self._data_texto(convite.get("expira_em"))))
-            acoes = QWidget()
-            layout = QHBoxLayout(acoes)
-            layout.setContentsMargins(4, 2, 4, 2)
-            renovar = QPushButton("Novo código")
-            renovar.setMinimumWidth(92)
+            renovar = self._botao_acao("Gerar novo código", "primario")
+            renovar.setMinimumWidth(145)
             renovar.clicked.connect(lambda _, cid=convite.get("id"), email=convite.get("email"): self.renovar_convite(cid, email))
-            cancelar = QPushButton("Cancelar")
-            cancelar.setMinimumWidth(74)
+            cancelar = self._botao_acao("Cancelar convite", "perigo")
             cancelar.clicked.connect(lambda _, cid=convite.get("id"): self.revogar("convite", cid))
-            layout.addWidget(renovar)
-            layout.addWidget(cancelar)
-            self.tabela_convites.setCellWidget(linha, 4, acoes)
+            self.tabela_convites.setCellWidget(linha, 4, self._celula_acoes(renovar, cancelar))
+            self.tabela_convites.setRowHeight(linha, 42)
         self.tabela_convites.resizeColumnsToContents()
-        self.tabela_convites.setColumnWidth(4, 190)
+        self.tabela_convites.setColumnWidth(4, 330)
 
     def criar_convite(self):
         nome, email = self.input_nome.text().strip(), self.input_email.text().strip()

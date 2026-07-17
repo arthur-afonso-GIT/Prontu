@@ -105,7 +105,7 @@ class MainWindow(QMainWindow):
         self.btn_config = QPushButton(" ⚙️ Configurações")
         
         self.btn_financeiro = QPushButton(" 💰 Financeiro")
-        self.btn_equipe = QPushButton("Equipe")
+        self.btn_equipe = QPushButton(" 👥 Equipe")
         self.botoes_menu = [self.btn_home, self.btn_pacientes, self.btn_agenda, self.btn_fichas, self.btn_financeiro, self.btn_equipe, self.btn_config]
         
         for btn in self.botoes_menu:
@@ -190,7 +190,8 @@ class MainWindow(QMainWindow):
         self.btn_equipe.setVisible(self.db.possui_recurso("equipe") and papel == "proprietario")
         self.btn_home.setVisible(papel != "secretaria")
         self.btn_fichas.setVisible(papel != "secretaria")
-        self.btn_config.setVisible(papel == "proprietario")
+        self.btn_financeiro.setVisible(papel != "secretaria")
+        self.btn_config.setVisible(papel != "secretaria")
 
     def atualizar_status_sessao(self):
         """Exibe somente um estado que o aplicativo consegue afirmar com segurança."""

@@ -6,27 +6,39 @@
 
 <p align="center">
   <strong>Intelligent clinic management for desktop.</strong><br>
-  A focused workspace for patient care, appointments, clinical records, payments, and professional documents.
+  A focused workspace for patient care, appointments, clinical records, payments, and team collaboration.
 </p>
 
 ---
 
 ## Overview
 
-Prontu is a desktop application designed to simplify the daily workflow of a healthcare practice. It keeps the most important information in one place: patients, clinical records, agenda, financial follow-up, documents, and encrypted backups.
+Prontu is a desktop-first clinic management application built for the daily routine of small healthcare practices. It brings patient information, clinical records, appointments, financial follow-up, document exports, encrypted backups, and shared team access into one clear workspace.
 
-The product is built as a desktop-first experience and is intended to be delivered through a Windows installer in production, without asking the end user to configure Python or a database.
+The product is designed to be delivered as a Windows application. End users should work with the installed product, not configure Python, databases, or cloud infrastructure.
 
-## Highlights
+## Core capabilities
 
-- **Patient management** — organized profiles, specialty folders, clinical history, and quick search.
-- **Clinical records** — fill, edit, save, review, and export patient records from reusable templates.
-- **Template builder** — create custom record models with sections and input fields, with a live preview.
-- **Smart agenda** — schedule appointments, avoid time conflicts, update appointment status, and open a record directly from an appointment.
-- **Financial follow-up** — appointments appear automatically in the payment panel; track received, pending, and overdue payments with clear visual status.
-- **Professional exports** — generate Word and PDF documents with patient and appointment information.
-- **Encrypted local backup** — configure a destination folder, backup retention, metadata inclusion, and a recovery password.
-- **Multi-clinic isolation** — clinic data is separated by `consultorio_id`, so each activated clinic works only with its own data.
+- **Patient management** — searchable patient profiles, specialty folders, clinical history, and follow-up scheduling.
+- **Clinical records** — create, fill, edit, review, archive, and export records linked to each patient.
+- **Template builder** — create custom record models with sections, text fields, dates, numbers, checkboxes, and multiple-choice inputs.
+- **Smart agenda** — daily and weekly appointment views, conflict prevention, status tracking, and direct access to the patient record.
+- **Financial follow-up** — appointments feed the payment panel automatically; received, pending, and overdue amounts are clearly identified.
+- **Returns and follow-ups** — schedule expected patient returns and keep the next action visible in the patient workflow.
+- **Professional exports** — generate Word and PDF documents from patient and clinical-record data.
+- **Encrypted local backup** — configure a secure destination, retention policy, optional attachment metadata, and a recovery password.
+
+## Team workspace
+
+Prontu supports individual accounts for a shared clinic database. Each person signs in with their own email and password, while all approved members work within the same clinic scope.
+
+| Role | Access |
+| --- | --- |
+| **Owner** | Full operational access, team invitations, access revocation, role changes, and audit history. |
+| **Professional** | Full operational access to patients, clinical records, agenda, returns, finance, exports, and settings. |
+| **Secretary** | Basic patient registration and appointment management, without access to clinical records, attachments, finance, settings, or team administration. |
+
+Owners can create invitations, select the invited role, regenerate invitation codes, revoke access, and manage the number of active seats allowed by the clinic plan.
 
 ## Screenshots
 
@@ -34,9 +46,9 @@ The product is built as a desktop-first experience and is intended to be deliver
 
 ![Prontu dashboard](docs/screenshots/dashboard.png)
 
-### Clinical records
+### Patient management
 
-![Prontu clinical records](docs/screenshots/clinical-records.png)
+![Prontu patient management](docs/screenshots/clinical-records.png)
 
 ### Appointment scheduling
 
@@ -52,7 +64,7 @@ The product is built as a desktop-first experience and is intended to be deliver
 | --- | --- |
 | Desktop application | Python 3.11, PySide6 (Qt for Python) |
 | Cloud data | Supabase, PostgreSQL, Row Level Security |
-| Secure activation | Supabase Edge Functions, TypeScript / Deno |
+| Authentication and team operations | Supabase Auth, Supabase Edge Functions, TypeScript / Deno |
 | Documents | python-docx, PySide6 Qt Print Support, pypdf |
 | Local security | cryptography, keyring |
 | Connectivity and configuration | httpx, python-dotenv |
@@ -63,30 +75,34 @@ The product is built as a desktop-first experience and is intended to be deliver
 ```text
 Prontu
 ├── main.py                 Application entry point
-├── database/               Supabase access, session and secure local storage
+├── database/               Supabase access, session management and secure local storage
 ├── ui/
-│   ├── main_window.py      Navigation shell and shared application behavior
-│   ├── screens/            Dashboard, patients, agenda, records, finance and settings
+│   ├── main_window.py      Navigation shell, role-aware menus and shared application behavior
+│   ├── screens/            Dashboard, patients, agenda, records, finance, team and settings
 │   └── assets/             Product branding and visual assets
+├── services/               Backup and background-work services
 ├── supabase/
-│   ├── migrations/         PostgreSQL schema, policies and database evolution
-│   └── functions/          Secure device-activation API
+│   ├── migrations/         PostgreSQL schema, Row Level Security policies and database evolution
+│   └── functions/          Activation, login, password reset and team-management APIs
 └── tests/                  Automated regression checks
 ```
 
-The desktop interface communicates with Supabase through a small Python data layer. Database migrations define the PostgreSQL structure and data policies, while the Edge Function handles sensitive device activation without exposing privileged database credentials in the app.
+The desktop interface communicates with Supabase through a small Python data layer. PostgreSQL migrations define data structure and policies; Edge Functions handle sensitive operations such as activation, account creation, invitations, role changes, and password recovery without exposing privileged credentials in the desktop application.
 
 ## Data and security
 
-- Every clinic operates within its own data scope.
-- Supabase policies reinforce clinic-level access control.
-- Device activation validates the application key before opening the workspace.
-- Session data and local secrets are stored securely on the device.
-- Local backups are encrypted and can be protected with a recovery password.
+- Every clinic operates in its own data scope through `consultorio_id`.
+- Supabase Row Level Security reinforces clinic and role boundaries at database level.
+- Each team member has an individual account and can be revoked by the clinic owner.
+- Audit history records operational events without exposing clinical content in the audit interface.
+- Device activation and session handling keep privileged database credentials out of the desktop application.
+- Local backup files are encrypted and can be protected with a recovery password.
+
+Prontu provides technical safeguards for a small-practice workflow. Legal compliance, privacy policies, retention rules, and operational procedures must be defined by each clinic before production use.
 
 ## Product direction
 
-Prontu is evolving toward a polished Windows product for small healthcare practices, with installer-based delivery, richer clinical workflows, reliable cloud synchronization, and clear financial visibility.
+Prontu is evolving into a polished Windows product for small healthcare practices: simple enough for a local clinic, structured enough for a collaborative team, and ready to grow through plan-based features and installer-based distribution.
 
 ## Author
 

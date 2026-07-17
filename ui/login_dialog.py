@@ -1,4 +1,34 @@
-from PySide6.QtWidgets import QCheckBox, QDialog, QFormLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTabWidget, QVBoxLayout, QWidget
+
+
+def campo_senha_com_visibilidade(campo: QLineEdit) -> QWidget:
+    """Cria um campo de senha com um botão visível para conferência."""
+    campo.setEchoMode(QLineEdit.EchoMode.Password)
+    container = QWidget()
+    layout = QHBoxLayout(container)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(6)
+    layout.addWidget(campo, 1)
+    botao = QPushButton("Mostrar")
+    botao.setFixedWidth(76)
+    botao.setToolTip("Mostrar senha")
+    botao.setStyleSheet(
+        "QPushButton { background: #e2e8f0; color: #0f172a; border: 1px solid #cbd5e1; "
+        "border-radius: 6px; padding: 8px 5px; font-weight: 600; } "
+        "QPushButton:hover { background: #cbd5e1; }"
+    )
+    layout.addWidget(botao)
+
+    def alternar() -> None:
+        visivel = campo.echoMode() == QLineEdit.EchoMode.Password
+        campo.setEchoMode(
+            QLineEdit.EchoMode.Normal if visivel else QLineEdit.EchoMode.Password
+        )
+        botao.setText("Ocultar" if visivel else "Mostrar")
+        botao.setToolTip("Ocultar senha" if visivel else "Mostrar senha")
+
+    botao.clicked.connect(alternar)
+    return container
 
 
 class CriarAcessoProprietarioDialog(QDialog):
@@ -21,11 +51,9 @@ class CriarAcessoProprietarioDialog(QDialog):
         form = QFormLayout()
         self.email, self.senha, self.confirmacao = QLineEdit(), QLineEdit(), QLineEdit()
         self.email.setPlaceholderText("seuemail@clinica.com")
-        for campo in (self.senha, self.confirmacao):
-            campo.setEchoMode(QLineEdit.EchoMode.Password)
         form.addRow("E-mail:", self.email)
-        form.addRow("Senha:", self.senha)
-        form.addRow("Confirmar senha:", self.confirmacao)
+        form.addRow("Senha:", campo_senha_com_visibilidade(self.senha))
+        form.addRow("Confirmar senha:", campo_senha_com_visibilidade(self.confirmacao))
         layout.addLayout(form)
         self.botao = QPushButton("Criar meu login")
         self.botao.setStyleSheet("QPushButton { background: #0284c7; color: white; border: 0; border-radius: 6px; padding: 10px; font-weight: 700; }")
@@ -127,8 +155,12 @@ class LoginDialog(QDialog):
     def _login(self):
         self.email_login, self.senha_login = QLineEdit(), QLineEdit()
         self.email_login.setPlaceholderText("seuemail@clinica.com")
-        self.senha_login.setEchoMode(QLineEdit.EchoMode.Password)
-        pagina = self._pagina([("E-mail:", self.email_login), ("Senha:", self.senha_login)], "", "Entrar", self.entrar)
+        pagina = self._pagina(
+            [("E-mail:", self.email_login), ("Senha:", campo_senha_com_visibilidade(self.senha_login))],
+            "",
+            "Entrar",
+            self.entrar,
+        )
         self.checkbox_lembrar = QCheckBox("Lembrar de mim neste dispositivo")
         self.checkbox_lembrar.setChecked(True)
         self.checkbox_lembrar.setToolTip("Deixe marcado apenas em um computador pessoal e protegido.")
@@ -143,8 +175,17 @@ class LoginDialog(QDialog):
         self.codigo, self.email, self.senha, self.confirmacao = QLineEdit(), QLineEdit(), QLineEdit(), QLineEdit()
         self.codigo.setPlaceholderText("PRONTU-XXXXXXXX")
         self.email.setPlaceholderText("O mesmo e-mail do convite")
-        for campo in (self.senha, self.confirmacao): campo.setEchoMode(QLineEdit.EchoMode.Password)
-        return self._pagina([("Código:", self.codigo), ("E-mail:", self.email), ("Senha:", self.senha), ("Confirmar senha:", self.confirmacao)], "Use o código enviado pelo proprietário para criar sua senha. A senha deve ter pelo menos 8 caracteres.", "Criar meu acesso", self.aceitar_convite)
+        return self._pagina(
+            [
+                ("Código:", self.codigo),
+                ("E-mail:", self.email),
+                ("Senha:", campo_senha_com_visibilidade(self.senha)),
+                ("Confirmar senha:", campo_senha_com_visibilidade(self.confirmacao)),
+            ],
+            "Use o código enviado pelo proprietário para criar sua senha. A senha deve ter pelo menos 8 caracteres.",
+            "Criar meu acesso",
+            self.aceitar_convite,
+        )
 
     def _ativacao(self):
         self.chave = QLineEdit(); self.chave.setPlaceholderText("PRONTU-...")
