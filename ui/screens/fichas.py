@@ -177,7 +177,7 @@ class FichasScreen(QWidget):
 
         self.left_layout.addLayout(botoes_importar_layout)
         
-        self.btn_criar_modelo = QPushButton("🛠️ Montar Novo Modelo")
+        self.btn_criar_modelo = QPushButton("Montar novo modelo")
         self.btn_criar_modelo.setStyleSheet("""
             QPushButton { background-color: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 10px; font-weight: bold; border-radius: 6px; }
             QPushButton:hover { background-color: #dcfce7; }
@@ -451,11 +451,11 @@ class FichasScreen(QWidget):
         
         self.limpar_layout_completamente(self.dinamic_form_layout)
             
-        lbl_info = QLabel("🛠️ Construtor de Ficha Personalizada (Modo Preview)")
+        lbl_info = QLabel("Construtor de ficha personalizada")
         lbl_info.setStyleSheet("font-size: 18px; font-weight: bold; color: #0284c7; margin-bottom: 2px;")
         self.dinamic_form_layout.addWidget(lbl_info)
         
-        lbl_sub = QLabel("Clique nos botões para adicionar campos. O formulário abaixo atualiza em tempo real:")
+        lbl_sub = QLabel("Adicione os campos necessários. A prévia é atualizada automaticamente.")
         lbl_sub.setStyleSheet("color: #64748b; font-size: 13px; margin-bottom: 12px;")
         self.dinamic_form_layout.addWidget(lbl_sub)
         

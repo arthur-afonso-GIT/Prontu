@@ -5,7 +5,8 @@ import unicodedata
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, 
                                QComboBox, QDateEdit, QHeaderView, QFrame, QTextEdit, QMessageBox, 
-                               QListWidget, QListWidgetItem, QDialog, QScrollArea, QCalendarWidget)
+                               QListWidget, QListWidgetItem, QDialog, QScrollArea, QCalendarWidget,
+                               QFileDialog)
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor
 from utils.operacao_segura import (
@@ -13,6 +14,9 @@ from utils.operacao_segura import (
     iniciar_operacao,
     mensagem_erro_usuario,
     registrar_falha,
+)
+from services.importador_pacientes import (
+    ler_planilha, preparar_registros, classificar_registros, payload_novo, payload_atualizacao,
 )
 
 
@@ -24,6 +28,23 @@ def normalizar_nome_pasta(valor):
     )
     texto = " ".join(texto.split())
     return texto if any(caractere.isalnum() for caractere in texto) else ""
+
+
+def normalizar_cpf(valor):
+    """Mantém somente os números do CPF para salvar e comparar."""
+    return "".join(caractere for caractere in str(valor or "") if caractere.isdigit())[:11]
+
+
+def formatar_cpf(valor):
+    """Apresenta o CPF no padrão brasileiro sem alterar seu valor interno."""
+    numeros = normalizar_cpf(valor)
+    if len(numeros) <= 3:
+        return numeros
+    if len(numeros) <= 6:
+        return f"{numeros[:3]}.{numeros[3:]}"
+    if len(numeros) <= 9:
+        return f"{numeros[:3]}.{numeros[3:6]}.{numeros[6:]}"
+    return f"{numeros[:3]}.{numeros[3:6]}.{numeros[6:9]}-{numeros[9:]}"
 
 
 class VisualizarFichaHistoricoDialog(QDialog):
@@ -146,6 +167,183 @@ class EditarFichaHistoricoDialog(QDialog):
             self.accept()
 
 
+class ImportarPacientesDialog(QDialog):
+    """Prévia e confirmação de importação de pacientes por CSV ou Excel."""
+    def __init__(self, tela_pacientes):
+        super().__init__(tela_pacientes)
+        self.tela_pacientes = tela_pacientes
+        self.registros_classificados = []
+        self.campos_presentes = set()
+        self.setWindowTitle("Importar pacientes")
+        self.setMinimumSize(760, 520)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(12)
+
+        titulo = QLabel("Importar pacientes")
+        titulo.setStyleSheet("font-size: 18px; font-weight: bold; color: #0f172a;")
+        layout.addWidget(titulo)
+        descricao = QLabel("Escolha uma planilha CSV ou Excel. O Prontu mostrará uma prévia antes de salvar qualquer dado.")
+        descricao.setWordWrap(True)
+        descricao.setStyleSheet("color: #64748b; font-size: 12px;")
+        layout.addWidget(descricao)
+
+        arquivo_layout = QHBoxLayout()
+        self.lbl_arquivo = QLabel("Nenhum arquivo selecionado")
+        self.lbl_arquivo.setStyleSheet("color: #475569; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px;")
+        btn_arquivo = QPushButton("Escolher arquivo")
+        btn_arquivo.setStyleSheet("QPushButton { background: #eff6ff; color: #0369a1; border: 1px solid #93c5fd; border-radius: 6px; padding: 8px 12px; font-weight: bold; } QPushButton:hover { background: #dbeafe; }")
+        btn_arquivo.clicked.connect(self.escolher_arquivo)
+        arquivo_layout.addWidget(self.lbl_arquivo, stretch=1)
+        arquivo_layout.addWidget(btn_arquivo)
+        layout.addLayout(arquivo_layout)
+
+        modo_layout = QHBoxLayout()
+        modo_layout.addWidget(QLabel("Ao encontrar paciente já cadastrado:"))
+        self.combo_modo = QComboBox()
+        self.combo_modo.addItem("Adicionar apenas novos (ignorar duplicados)", "adicionar")
+        self.combo_modo.addItem("Atualizar dados dos pacientes encontrados", "atualizar")
+        self.combo_modo.currentIndexChanged.connect(self.atualizar_previa)
+        modo_layout.addWidget(self.combo_modo, stretch=1)
+        layout.addLayout(modo_layout)
+
+        self.lbl_resumo = QLabel("Selecione um arquivo para começar.")
+        self.lbl_resumo.setWordWrap(True)
+        self.lbl_resumo.setStyleSheet("background: #f0f9ff; color: #075985; border: 1px solid #bae6fd; border-radius: 6px; padding: 9px; font-weight: 500;")
+        layout.addWidget(self.lbl_resumo)
+
+        self.tabela_previa = QTableWidget()
+        self.tabela_previa.setColumnCount(5)
+        self.tabela_previa.setHorizontalHeaderLabels(["Linha", "Nome", "Telefone", "CPF", "Resultado"])
+        self.tabela_previa.verticalHeader().setVisible(False)
+        self.tabela_previa.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tabela_previa.setSelectionMode(QTableWidget.NoSelection)
+        self.tabela_previa.setStyleSheet("QTableWidget { background: white; border: 1px solid #cbd5e1; border-radius: 7px; gridline-color: #e2e8f0; } QHeaderView::section { background: #f8fafc; color: #475569; font-weight: bold; padding: 7px; border: none; border-bottom: 1px solid #cbd5e1; }")
+        cabecalho = self.tabela_previa.horizontalHeader()
+        cabecalho.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for coluna in range(1, 5):
+            cabecalho.setSectionResizeMode(coluna, QHeaderView.Stretch)
+        layout.addWidget(self.tabela_previa, stretch=1)
+
+        acoes = QHBoxLayout()
+        btn_cancelar = QPushButton("Cancelar")
+        btn_cancelar.clicked.connect(self.reject)
+        self.btn_importar = QPushButton("Confirmar importação")
+        self.btn_importar.setEnabled(False)
+        self.btn_importar.setStyleSheet("QPushButton { background: #0284c7; color: white; border: none; border-radius: 6px; padding: 9px 16px; font-weight: bold; } QPushButton:hover { background: #0369a1; } QPushButton:disabled { background: #cbd5e1; color: #64748b; }")
+        self.btn_importar.clicked.connect(self.confirmar_importacao)
+        acoes.addStretch()
+        acoes.addWidget(btn_cancelar)
+        acoes.addWidget(self.btn_importar)
+        layout.addLayout(acoes)
+
+    def escolher_arquivo(self):
+        caminho, _ = QFileDialog.getOpenFileName(self, "Selecionar planilha de pacientes", "", "Planilhas (*.csv *.xlsx)")
+        if not caminho:
+            return
+        try:
+            cabecalhos, linhas = ler_planilha(caminho)
+            registros, campos_presentes, erros = preparar_registros(cabecalhos, linhas)
+            if not registros:
+                raise ValueError("Nenhuma linha válida foi encontrada. Verifique a coluna Nome.")
+            resposta = self.tela_pacientes.db.supabase.table("pacientes") \
+                .select("id, nome, cpf, telefone") \
+                .eq("consultorio_id", self.tela_pacientes.db.consultorio_id) \
+                .is_("deleted_at", "null") \
+                .execute()
+            self.registros_classificados = classificar_registros(registros, resposta.data or [])
+            self.campos_presentes = campos_presentes
+            self.lbl_arquivo.setText(caminho)
+            if erros:
+                self.lbl_resumo.setText(f"{len(erros)} linha(s) sem nome serão ignoradas. Revise a prévia abaixo.")
+            self.atualizar_previa()
+        except Exception as erro:
+            self.registros_classificados = []
+            self.btn_importar.setEnabled(False)
+            QMessageBox.warning(self, "Arquivo não importado", str(erro))
+
+    def atualizar_previa(self):
+        if not self.registros_classificados:
+            return
+        modo = self.combo_modo.currentData()
+        novos = atualizados = ignorados = 0
+        self.tabela_previa.setRowCount(0)
+        for indice, item in enumerate(self.registros_classificados):
+            dados, existente = item["dados"], item["existente"]
+            if item["duplicado_no_arquivo"]:
+                resultado = "Ignorado: duplicado na planilha"
+                ignorados += 1
+            elif existente and modo == "adicionar":
+                resultado = "Ignorado: já cadastrado"
+                ignorados += 1
+            elif existente:
+                resultado = "Será atualizado"
+                atualizados += 1
+            else:
+                resultado = "Será adicionado"
+                novos += 1
+            if indice < 12:
+                linha = self.tabela_previa.rowCount()
+                self.tabela_previa.insertRow(linha)
+                valores = [str(dados["_linha"]), dados["nome"], dados["telefone"], dados["cpf"], resultado]
+                for coluna, valor in enumerate(valores):
+                    self.tabela_previa.setItem(linha, coluna, QTableWidgetItem(valor))
+        total = len(self.registros_classificados)
+        self.lbl_resumo.setText(f"Planilha analisada: {total} registro(s) válido(s). {novos} novo(s), {atualizados} atualização(ões) e {ignorados} ignorado(s). A prévia mostra os primeiros 12.")
+        self.btn_importar.setEnabled(novos + atualizados > 0)
+
+    def confirmar_importacao(self):
+        modo = self.combo_modo.currentData()
+        novos = sum(1 for item in self.registros_classificados if not item["existente"] and not item["duplicado_no_arquivo"])
+        atualizados = sum(1 for item in self.registros_classificados if item["existente"] and not item["duplicado_no_arquivo"])
+        if modo == "adicionar":
+            atualizados = 0
+        texto = f"Você vai importar {novos} paciente(s) novo(s)"
+        if atualizados:
+            texto += f" e atualizar {atualizados} cadastro(s) existente(s)"
+        texto += ".\n\nDeseja continuar?"
+        if QMessageBox.question(self, "Confirmar importação", texto, QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+
+        if not iniciar_operacao(self.btn_importar, "Importando..."):
+            return
+        adicionados = atualizados_ok = falhas = 0
+        try:
+            for item in self.registros_classificados:
+                if item["duplicado_no_arquivo"]:
+                    continue
+                dados, existente = item["dados"], item["existente"]
+                if existente:
+                    if modo != "atualizar":
+                        continue
+                    alteracoes = payload_atualizacao(dados, self.campos_presentes)
+                    if alteracoes:
+                        self.tela_pacientes.db.supabase.table("pacientes") \
+                            .update(alteracoes) \
+                            .eq("id", existente["id"]) \
+                            .eq("consultorio_id", self.tela_pacientes.db.consultorio_id) \
+                            .execute()
+                        atualizados_ok += 1
+                else:
+                    self.tela_pacientes.db.supabase.table("pacientes") \
+                        .insert(payload_novo(dados, self.tela_pacientes.db.consultorio_id)) \
+                        .execute()
+                    adicionados += 1
+        except Exception as erro:
+            falhas += 1
+            registrar_falha("importar pacientes", erro)
+        finally:
+            finalizar_operacao(self.btn_importar)
+
+        self.tela_pacientes.carregar_pacientes_tabela()
+        if falhas:
+            QMessageBox.warning(self, "Importação parcialmente concluída", f"{adicionados} adicionado(s) e {atualizados_ok} atualizado(s). Ocorreu uma falha; confira os dados e tente novamente.")
+            return
+        QMessageBox.information(self, "Importação concluída", f"{adicionados} paciente(s) adicionado(s) e {atualizados_ok} atualizado(s).")
+        self.accept()
+
+
 class PacientesScreen(QWidget):
     def __init__(self, database_instancia):
         super().__init__()
@@ -201,6 +399,15 @@ class PacientesScreen(QWidget):
         """)
         self.combo_filtro_pasta.currentTextChanged.connect(self.filtrar_pacientes)
         filter_layout.addWidget(self.combo_filtro_pasta)
+
+        self.btn_importar_pacientes = QPushButton("Importar pacientes")
+        self.btn_importar_pacientes.setToolTip("Importe uma planilha CSV ou Excel com pacientes já cadastrados")
+        self.btn_importar_pacientes.setStyleSheet("""
+            QPushButton { background: #dbeafe; color: #075985; border: 1px solid #7dd3fc; border-radius: 6px; padding: 8px 12px; font-weight: bold; min-height: 20px; }
+            QPushButton:hover { background: #bae6fd; border-color: #0ea5e9; }
+        """)
+        self.btn_importar_pacientes.clicked.connect(self.abrir_importador_pacientes)
+        filter_layout.addWidget(self.btn_importar_pacientes)
 
         left_layout.addLayout(filter_layout)
         
@@ -365,6 +572,9 @@ class PacientesScreen(QWidget):
         box_cpf.addWidget(QLabel("CPF:"))
         self.input_cpf = QLineEdit()
         self.input_cpf.setStyleSheet(input_style)
+        self.input_cpf.setPlaceholderText("000.000.000-00")
+        self.input_cpf.setMaxLength(14)
+        self.input_cpf.textEdited.connect(self._formatar_cpf_ao_digitar)
         box_cpf.addWidget(self.input_cpf)
         row_docs.addLayout(box_cpf)
         
@@ -488,32 +698,32 @@ class PacientesScreen(QWidget):
         self.list_retornos = QListWidget()
         self.list_retornos.setFixedHeight(78)
         self.list_retornos.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.list_retornos.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.list_retornos.setToolTip("Duplo clique para abrir o retorno na Agenda")
         self.list_retornos.setStyleSheet("""
             QListWidget { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; color: #0f172a; }
             QListWidget::item { padding: 5px 7px; border-bottom: 1px solid #e2e8f0; }
+            QListWidget::item:hover { background: #eff6ff; color: #0369a1; }
             QListWidget::item:selected { background: #dbeafe; color: #0f172a; }
         """)
+        self.list_retornos.itemSelectionChanged.connect(self._atualizar_acoes_retorno)
+        self.list_retornos.itemDoubleClicked.connect(self.abrir_retorno_na_agenda)
         right_layout.addWidget(self.list_retornos)
 
-        acoes_retornos = QHBoxLayout()
-        acoes_retornos.setSpacing(5)
-        self.btn_agendar_retorno = QPushButton("Agendar")
-        self.btn_agendar_retorno.setStyleSheet("QPushButton { background: #eff6ff; color: #0369a1; border: 1px solid #93c5fd; border-radius: 5px; padding: 5px; font-weight: bold; } QPushButton:hover { background: #dbeafe; }")
+        acoes_retornos = QVBoxLayout()
+        acoes_retornos.setSpacing(6)
+        self.btn_agendar_retorno = QPushButton("Agendar retorno")
+        self.btn_agendar_retorno.setMinimumHeight(32)
+        self.btn_agendar_retorno.setStyleSheet("QPushButton { background: #eff6ff; color: #0369a1; border: 1px solid #93c5fd; border-radius: 5px; padding: 6px 10px; font-weight: bold; } QPushButton:hover { background: #dbeafe; }")
         self.btn_agendar_retorno.clicked.connect(self.agendar_retorno_selecionado)
         acoes_retornos.addWidget(self.btn_agendar_retorno)
-        self.btn_concluir_retorno = QPushButton("Concluir")
-        self.btn_concluir_retorno.setStyleSheet("QPushButton { background: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; border-radius: 5px; padding: 5px; font-weight: bold; } QPushButton:hover { background: #d1fae5; }")
-        self.btn_concluir_retorno.clicked.connect(lambda: self.alterar_status_retorno_selecionado("Concluído"))
-        acoes_retornos.addWidget(self.btn_concluir_retorno)
-        self.btn_nao_retorno = QPushButton("Não retornou")
-        self.btn_nao_retorno.setStyleSheet("QPushButton { background: #fff7ed; color: #c2410c; border: 1px solid #fdba74; border-radius: 5px; padding: 5px; font-weight: bold; } QPushButton:hover { background: #ffedd5; }")
+        self.btn_nao_retorno = QPushButton("Não retornará")
+        self.btn_nao_retorno.setMinimumHeight(32)
+        self.btn_nao_retorno.setStyleSheet("QPushButton { background: #fff7ed; color: #c2410c; border: 1px solid #fdba74; border-radius: 5px; padding: 6px 10px; font-weight: bold; } QPushButton:hover { background: #ffedd5; }")
         self.btn_nao_retorno.clicked.connect(lambda: self.alterar_status_retorno_selecionado("Não retornou"))
         acoes_retornos.addWidget(self.btn_nao_retorno)
-        self.btn_cancelar_retorno = QPushButton("Cancelar")
-        self.btn_cancelar_retorno.setStyleSheet("QPushButton { background: #fef2f2; color: #b91c1c; border: 1px solid #fca5a5; border-radius: 5px; padding: 5px; font-weight: bold; } QPushButton:hover { background: #fee2e2; }")
-        self.btn_cancelar_retorno.clicked.connect(lambda: self.alterar_status_retorno_selecionado("Cancelado"))
-        acoes_retornos.addWidget(self.btn_cancelar_retorno)
         right_layout.addLayout(acoes_retornos)
+        self._atualizar_acoes_retorno()
         
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
@@ -570,18 +780,6 @@ class PacientesScreen(QWidget):
         self.btn_excluir.clicked.connect(self.excluir_paciente)
         right_layout.addWidget(self.btn_excluir)
 
-        self.btn_programar_retorno = QPushButton("Programar retorno")
-        self.btn_programar_retorno.setVisible(False)
-        self.btn_programar_retorno.setStyleSheet("""
-            QPushButton {
-                background-color: #eff6ff; color: #0369a1; border: 1px solid #93c5fd;
-                border-radius: 6px; padding: 8px; font-weight: bold; min-height: 20px;
-            }
-            QPushButton:hover { background-color: #dbeafe; }
-        """)
-        self.btn_programar_retorno.clicked.connect(self.programar_retorno)
-        right_layout.addWidget(self.btn_programar_retorno)
-        
         combobox_dropdown_style = """
             QComboBox { background-color: white; color: #0f172a; }
             QComboBox QAbstractItemView {
@@ -607,6 +805,22 @@ class PacientesScreen(QWidget):
             self.input_cpf.text(), self.input_rg.text(), self.input_civil.text(), self.input_profissao.text(),
             self.input_endereco.text(), self.input_qp.toPlainText(), self.id_em_edicao,
         )
+
+    def abrir_importador_pacientes(self):
+        if not self.db.supabase:
+            self.mostrar_alerta_seguro("error", "Sem conexão", "Não há uma conexão segura ativa. Feche e abra o aplicativo novamente.")
+            return
+        ImportarPacientesDialog(self).exec()
+
+    def _formatar_cpf_ao_digitar(self, texto):
+        """Formata somente a exibição; o valor salvo continua só com números."""
+        cpf_formatado = formatar_cpf(texto)
+        if texto != cpf_formatado:
+            self.input_cpf.setText(cpf_formatado)
+            self.input_cpf.setCursorPosition(len(cpf_formatado))
+
+    def _definir_cpf_no_campo(self, valor):
+        self.input_cpf.setText(formatar_cpf(valor))
 
     def _marcar_formulario_salvo(self):
         self._estado_formulario_salvo = self._estado_formulario_atual()
@@ -676,6 +890,8 @@ class PacientesScreen(QWidget):
         # Índice da coluna "pasta" dentro de cada tupla de row_data (id, nome, telefone, convenio, pasta)
         indice_coluna_pasta = 4
 
+        # Evita repintar a grade para cada paciente carregado.
+        self.tabela.setUpdatesEnabled(False)
         for row_idx, row_data in enumerate(rows):
             self.tabela.insertRow(row_idx)
             for col_idx, value in enumerate(row_data):
@@ -720,6 +936,7 @@ class PacientesScreen(QWidget):
             layout_celula.addWidget(btn_excluir_linha, alignment=Qt.AlignmentFlag.AlignCenter)
             self.tabela.setCellWidget(row_idx, 5, celula_exclusao)
             self.tabela.setRowHeight(row_idx, 38)
+        self.tabela.setUpdatesEnabled(True)
 
     def carregar_paciente_selecionado(self):
         item_selecionado = self.tabela.selectedItems()
@@ -759,7 +976,7 @@ class PacientesScreen(QWidget):
                 self.input_convenio.setText(p.get("convenio") or "PARTICULAR")
                 self.input_pasta.setCurrentText(p.get("pasta") or "")
                 self.input_sexo.setCurrentText(p.get("sexo") or "Masculino")
-                self.input_cpf.setText(p.get("cpf") or "")
+                self._definir_cpf_no_campo(p.get("cpf"))
                 self.input_rg.setText(p.get("rg") or "")
                 self.input_civil.setText(p.get("estado_civil") or "")
                 self.input_profissao.setText(p.get("profissao") or "")
@@ -767,7 +984,6 @@ class PacientesScreen(QWidget):
                 self.input_qp.setPlainText(p.get("queixa") or "")
                 
                 self.btn_excluir.setVisible(True)
-                self.btn_programar_retorno.setVisible(True)
                 self._marcar_formulario_salvo()
         except Exception as e:
             print(f"Erro ao carregar dados de texto do paciente: {e}")
@@ -806,11 +1022,25 @@ class PacientesScreen(QWidget):
             data = QDate.fromString(str(retorno.get("data_prevista") or ""), "yyyy-MM-dd")
             data_texto = data.toString("dd/MM/yyyy") if data.isValid() else "Data não informada"
             status = str(retorno.get("status") or "Pendente")
-            motivo = str(retorno.get("motivo") or "Sem motivo informado").strip()
+            motivo = str(retorno.get("motivo") or "").strip()
             icone = {"Pendente": "🟠", "Agendado": "🔵", "Concluído": "🟢", "Não retornou": "🔴", "Cancelado": "⚪"}.get(status, "•")
-            item = QListWidgetItem(f"{icone} {data_texto} — {status} | {motivo}")
+            texto = f"{icone} {data_texto} — {status}"
+            if motivo and motivo != "Retorno criado após consulta realizada":
+                texto += f" | {motivo}"
+            item = QListWidgetItem(texto)
             item.setData(Qt.ItemDataRole.UserRole, retorno)
             self.list_retornos.addItem(item)
+        self._atualizar_acoes_retorno()
+
+    def _atualizar_acoes_retorno(self):
+        """Só libera ações quando existe uma pendência válida selecionada."""
+        item = self.list_retornos.currentItem() if hasattr(self, "list_retornos") else None
+        retorno = item.data(Qt.ItemDataRole.UserRole) if item else None
+        pendente = bool(retorno and retorno.get("status") == "Pendente")
+        if hasattr(self, "btn_agendar_retorno"):
+            self.btn_agendar_retorno.setEnabled(pendente)
+        if hasattr(self, "btn_nao_retorno"):
+            self.btn_nao_retorno.setEnabled(pendente)
 
     def _retorno_selecionado(self):
         item = self.list_retornos.currentItem()
@@ -826,10 +1056,60 @@ class PacientesScreen(QWidget):
         if retorno.get("status") != "Pendente":
             self.mostrar_alerta_seguro("warning", "Retorno já tratado", "Somente retornos pendentes podem ser enviados para a Agenda.")
             return
+        data_prevista = self._escolher_data_retorno()
+        if not data_prevista:
+            return
+        if not self.db.definir_data_retorno(retorno.get("id"), data_prevista):
+            self.mostrar_alerta_seguro("error", "Data não salva", "Não foi possível preparar o retorno para a Agenda.")
+            return
+        retorno["data_prevista"] = data_prevista
         retorno["paciente_nome"] = self.input_nome.text().strip()
         janela = getattr(self, "window_principal", None)
         if janela and hasattr(janela, "agendar_retorno_do_painel"):
             janela.agendar_retorno_do_painel(retorno)
+
+    def abrir_retorno_na_agenda(self, item):
+        """Abre o retorno no dia previsto; pendências sem data pedem agendamento."""
+        retorno = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not retorno:
+            return
+        data = QDate.fromString(str(retorno.get("data_prevista") or ""), "yyyy-MM-dd")
+        if not data.isValid() and retorno.get("status") == "Pendente":
+            self.agendar_retorno_selecionado()
+            return
+        if not data.isValid():
+            self.mostrar_alerta_seguro(
+                "warning", "Data não definida", "Defina a data do retorno antes de abrir a Agenda."
+            )
+            return
+        janela = getattr(self, "window_principal", None)
+        if janela and hasattr(janela, "abrir_retorno_na_agenda"):
+            janela.abrir_retorno_na_agenda(retorno)
+
+    def _escolher_data_retorno(self):
+        dialogo = QDialog(self)
+        dialogo.setWindowTitle("Agendar retorno")
+        dialogo.setMinimumWidth(350)
+        layout = QVBoxLayout(dialogo)
+        layout.addWidget(QLabel("Escolha a data prevista para o retorno:"))
+        campo_data = QDateEdit()
+        campo_data.setCalendarPopup(True)
+        campo_data.setDisplayFormat("dd/MM/yyyy")
+        campo_data.setDate(QDate.currentDate().addDays(30))
+        layout.addWidget(campo_data)
+        botoes = QHBoxLayout()
+        botoes.addStretch()
+        cancelar = QPushButton("Cancelar")
+        continuar = QPushButton("Abrir Agenda")
+        continuar.setStyleSheet("QPushButton { background: #0284c7; color: white; border: none; border-radius: 6px; padding: 8px 14px; font-weight: bold; } QPushButton:hover { background: #0369a1; }")
+        cancelar.clicked.connect(dialogo.reject)
+        continuar.clicked.connect(dialogo.accept)
+        botoes.addWidget(cancelar)
+        botoes.addWidget(continuar)
+        layout.addLayout(botoes)
+        if dialogo.exec() != QDialog.DialogCode.Accepted:
+            return ""
+        return campo_data.date().toString("yyyy-MM-dd")
 
     def alterar_status_retorno_selecionado(self, novo_status):
         retorno = self._retorno_selecionado()
@@ -930,10 +1210,12 @@ class PacientesScreen(QWidget):
                 fone = str(p.get("telefone") or "").lower()
                 conv = str(p.get("convenio") or "").lower()
                 pasta = str(p.get("pasta") or "").strip() or "Geral"
-                cpf = str(p.get("cpf") or "").lower()
+                cpf = normalizar_cpf(p.get("cpf"))
                 rg = str(p.get("rg") or "").lower()
                 
-                match_texto = not texto or (texto in nome or texto in fone or texto in conv or texto in cpf or texto in rg)
+                cpf_busca = normalizar_cpf(texto)
+                match_cpf = bool(cpf_busca) and cpf_busca in cpf
+                match_texto = not texto or (texto in nome or texto in fone or texto in conv or texto in rg or match_cpf)
                 match_pasta = "Todas as Pastas" in pasta_filtro or pasta == pasta_filtro
                 
                 if match_texto and match_pasta:
@@ -965,7 +1247,7 @@ class PacientesScreen(QWidget):
         conv = self.input_convenio.text().strip()
         pasta = self.input_pasta.currentText().strip() or "Geral"
         sexo = self.input_sexo.currentText()
-        cpf = self.input_cpf.text().strip()
+        cpf = normalizar_cpf(self.input_cpf.text())
         rg = self.input_rg.text().strip()
         civil = self.input_civil.text().strip()
         prof = self.input_profissao.text().strip()
@@ -1184,7 +1466,7 @@ class PacientesScreen(QWidget):
         self.list_retornos.clear()
         self.tabela.clearSelection()
         self.btn_excluir.setVisible(False)
-        self.btn_programar_retorno.setVisible(False)
+        self._atualizar_acoes_retorno()
         # Sempre garante que "Geral" (ou a primeira pasta válida) fique
         # selecionada — nunca deixa o combo em branco (índice -1), que
         # antes podia gravar o paciente com pasta="" (invisível na contagem).
@@ -1198,6 +1480,7 @@ class PacientesScreen(QWidget):
     def preencher_formulario_via_importacao(self, dados):
         self.input_nome.setText(dados.get("nome", ""))
         self.input_tel.setText(dados.get("telefone", ""))
+        self._definir_cpf_no_campo(dados.get("cpf", ""))
         self.input_convenio.setText(dados.get("convenio", "PARTICULAR"))
         self.input_endereco.setText(dados.get("endereco", ""))
         self.input_qp.setText(dados.get("qp", ""))

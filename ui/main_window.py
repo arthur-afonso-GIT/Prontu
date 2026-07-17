@@ -32,6 +32,9 @@ class MainWindow(QMainWindow):
         # Recebe a conexão única do Supabase ativada no main.py
         self.db = database_instancia
         self._ultima_atualizacao_tela = {}
+        # Evita repetir consultas remotas ao alternar rapidamente entre telas.
+        # Operações de salvar continuam atualizando a própria tela na hora.
+        self._intervalo_atualizacao_tela = 8.0
 
         self.init_db_estruturas()
         self.pastas_sistema = self.carregar_pastas_sqlite()
@@ -233,7 +236,7 @@ class MainWindow(QMainWindow):
 
         agora = time.monotonic()
         ultima = self._ultima_atualizacao_tela.get(indice, 0)
-        if agora - ultima < 2.0:
+        if agora - ultima < self._intervalo_atualizacao_tela:
             return
         self._ultima_atualizacao_tela[indice] = agora
         QTimer.singleShot(40, lambda: self._atualizar_tela_visivel(indice))
@@ -307,6 +310,12 @@ class MainWindow(QMainWindow):
             if hasattr(self.screen_equipe, 'carregar_dados'):
                 self.screen_equipe.carregar_dados()
 
+    def atualizar_dados_home(self):
+        """Atualiza o painel imediatamente após uma alteração feita no app."""
+        self._ultima_atualizacao_tela[0] = time.monotonic()
+        if hasattr(self.screen_home, "renderizar_lista_pastas"):
+            self.screen_home.renderizar_lista_pastas(force=True)
+
     def navegar_para_novo_paciente(self):
         """Callback do botão 'Novo Paciente' da Home: limpa o formulário e vai para a aba de Pacientes."""
         if hasattr(self.screen_pacientes, 'limpar_formulario'):
@@ -351,6 +360,17 @@ class MainWindow(QMainWindow):
             0,
             lambda: self.screen_agenda.abrir_consulta_por_data_hora(consulta)
             if hasattr(self.screen_agenda, "abrir_consulta_por_data_hora") else None,
+        )
+
+    def abrir_retorno_na_agenda(self, retorno):
+        """Abre a Agenda na data já definida para um retorno."""
+        self.mudar_tela(2, self.btn_agenda, atualizar=False)
+        if self.painel_telas.currentIndex() != 2:
+            return
+        QTimer.singleShot(
+            0,
+            lambda: self.screen_agenda.abrir_data_do_retorno(retorno.get("data_prevista"))
+            if hasattr(self.screen_agenda, "abrir_data_do_retorno") else None,
         )
 
     def abrir_paciente_especifico(self, paciente_id):

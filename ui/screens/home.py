@@ -1,6 +1,7 @@
 import os
+import time
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                               QFrame, QTableWidget, QHeaderView, QPushButton, 
+                               QFrame, QTableWidget, QHeaderView, QPushButton, QSizePolicy,
                                QInputDialog, QMessageBox, QTableWidgetItem, QColorDialog)
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor
@@ -15,6 +16,7 @@ class HomeScreen(QWidget):
         self.on_agendar_retorno_click = on_agendar_retorno_click
         self.on_consulta_click = on_consulta_click
         self.db = window_principal.db
+        self._ultima_atualizacao_remota = 0.0
         
         # Layout Principal
         main_layout = QVBoxLayout(self)
@@ -71,10 +73,11 @@ class HomeScreen(QWidget):
         lbl_pastas_titulo = QLabel("📁 Pastas Clínicas / Especialidades")
         lbl_pastas_titulo.setStyleSheet("font-size: 16px; font-weight: bold; color: #1e293b;")
         
-        btn_add_pasta = QPushButton("✨ Criar Nova Pasta")
+        btn_add_pasta = QPushButton("Nova pasta")
         btn_add_pasta.setStyleSheet("""
-            QPushButton { background-color: #f1f5f9; color: #0f172a; padding: 6px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-weight: 500; font-size: 12px; }
-            QPushButton:hover { background-color: #e2e8f0; }
+            QPushButton { background-color: #dbeafe; color: #075985; padding: 7px 14px; border: 1px solid #7dd3fc; border-radius: 6px; font-weight: 700; font-size: 12px; }
+            QPushButton:hover { background-color: #bae6fd; border-color: #0ea5e9; color: #0c4a6e; }
+            QPushButton:pressed { background-color: #a5f3fc; }
         """)
         btn_add_pasta.clicked.connect(self.acao_criar_nova_pasta)
         
@@ -104,7 +107,7 @@ class HomeScreen(QWidget):
         self.table_agenda_resumo.setColumnCount(3)
         self.table_agenda_resumo.setHorizontalHeaderLabels(["Horário", "Paciente", "Status"])
         self.table_agenda_resumo.verticalHeader().setVisible(False)
-        self.table_agenda_resumo.setShowGrid(False)
+        self.table_agenda_resumo.setShowGrid(True)
         self.table_agenda_resumo.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table_agenda_resumo.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table_agenda_resumo.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
@@ -114,8 +117,8 @@ class HomeScreen(QWidget):
         self.table_agenda_resumo.setCursor(Qt.CursorShape.PointingHandCursor)
         self.table_agenda_resumo.setFixedHeight(210)
         self.table_agenda_resumo.setStyleSheet("""
-            QTableWidget { background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 13px; color: #334155; }
-            QTableWidget::item { border-bottom: 1px solid #f1f5f9; padding: 6px; }
+            QTableWidget { background-color: white; border: 1px solid #cbd5e1; border-radius: 8px; gridline-color: #cbd5e1; font-size: 13px; color: #334155; }
+            QTableWidget::item { border-bottom: 1px solid #cbd5e1; padding: 6px; }
             QTableWidget::item:hover { background-color: #eff6ff; color: #0369a1; }
             QHeaderView::section { background-color: #f8fafc; font-weight: bold; color: #64748b; border: none; padding: 6px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: left; }
         """)
@@ -135,20 +138,22 @@ class HomeScreen(QWidget):
         retornos_vbox.addWidget(lbl_retornos_tit)
         self.table_retornos = QTableWidget()
         self.table_retornos.setColumnCount(3)
-        self.table_retornos.setHorizontalHeaderLabels(["Paciente", "Previsto", ""])
+        self.table_retornos.setHorizontalHeaderLabels(["Paciente", "Previsto", "Ação"])
         self.table_retornos.verticalHeader().setVisible(False)
-        self.table_retornos.setShowGrid(False)
+        self.table_retornos.verticalHeader().setDefaultSectionSize(42)
+        self.table_retornos.setShowGrid(True)
         self.table_retornos.setFixedHeight(210)
         self.table_retornos.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table_retornos.setStyleSheet("""
-            QTableWidget { background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 12px; color: #334155; }
-            QTableWidget::item { border-bottom: 1px solid #f1f5f9; padding: 6px; }
+            QTableWidget { background-color: white; border: 1px solid #cbd5e1; border-radius: 8px; gridline-color: #cbd5e1; font-size: 12px; color: #334155; }
+            QTableWidget::item { border-bottom: 1px solid #cbd5e1; padding: 6px; }
             QHeaderView::section { background-color: #f8fafc; font-weight: bold; color: #64748b; border: none; padding: 6px; border-bottom: 1px solid #e2e8f0; font-size: 11px; }
         """)
         h_retornos = self.table_retornos.horizontalHeader()
         h_retornos.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         h_retornos.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        h_retornos.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        h_retornos.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.table_retornos.setColumnWidth(2, 118)
         retornos_vbox.addWidget(self.table_retornos)
         split_tables_layout.addLayout(retornos_vbox, stretch=1)
         
@@ -163,14 +168,18 @@ class HomeScreen(QWidget):
         self.table_recentes.setColumnCount(2)
         self.table_recentes.setHorizontalHeaderLabels(["Nome do Paciente", "Pasta / Grupo"])
         self.table_recentes.verticalHeader().setVisible(False)
-        self.table_recentes.setShowGrid(False)
+        self.table_recentes.setShowGrid(True)
         self.table_recentes.setFixedHeight(210)
         self.table_recentes.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table_recentes.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table_recentes.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table_recentes.setMouseTracking(True)
+        self.table_recentes.viewport().setMouseTracking(True)
+        self.table_recentes.setCursor(Qt.CursorShape.PointingHandCursor)
         self.table_recentes.setStyleSheet("""
-            QTableWidget { background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 13px; color: #334155; }
-            QTableWidget::item { border-bottom: 1px solid #f1f5f9; padding: 6px; }
+            QTableWidget { background-color: white; border: 1px solid #cbd5e1; border-radius: 8px; gridline-color: #cbd5e1; font-size: 13px; color: #334155; }
+            QTableWidget::item { border-bottom: 1px solid #cbd5e1; padding: 6px; }
+            QTableWidget::item:hover { background-color: #eff6ff; color: #0369a1; }
             QTableWidget::item:selected { background-color: #e0f2fe; color: #0f172a; }
             QHeaderView::section { background-color: #f8fafc; font-weight: bold; color: #64748b; border: none; padding: 6px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: left; }
         """)
@@ -207,7 +216,13 @@ class HomeScreen(QWidget):
         hoje = QDate.currentDate()
         return f"{hoje.day()} de {meses[hoje.month() - 1]} de {hoje.year()}"
 
-    def renderizar_lista_pastas(self):
+    def renderizar_lista_pastas(self, force=False):
+        # A navegação pode chamar esta tela várias vezes em poucos segundos.
+        # Reutilizar o painel recém-carregado evita pausas por consultas repetidas.
+        agora = time.monotonic()
+        if not force and agora - self._ultima_atualizacao_remota < 8.0:
+            return
+        self._ultima_atualizacao_remota = agora
         while self.pastas_grid_layout.count():
             child = self.pastas_grid_layout.takeAt(0)
             if child.widget():
@@ -274,7 +289,7 @@ class HomeScreen(QWidget):
         if cor_escolhida.isValid():
             if hasattr(self.window_principal, 'atualizar_cor_pasta'):
                 self.window_principal.atualizar_cor_pasta(nome_pasta, cor_escolhida.name())
-            self.renderizar_lista_pastas()
+            self.renderizar_lista_pastas(force=True)
 
     def contar_pacientes_na_pasta_supabase(self, nome_pasta):
         if not self.db.supabase:
@@ -312,6 +327,10 @@ class HomeScreen(QWidget):
     def carregar_dados_iniciais(self, pacientes=None):
         if not self.db.supabase:
             return
+        # Evita redesenhar as tabelas a cada célula inserida.
+        self.table_recentes.setUpdatesEnabled(False)
+        self.table_agenda_resumo.setUpdatesEnabled(False)
+        self.table_retornos.setUpdatesEnabled(False)
         try:
             self.table_recentes.setRowCount(0)
             
@@ -362,6 +381,7 @@ class HomeScreen(QWidget):
             hoje = QDate.currentDate().toString("yyyy-MM-dd")
             for linha, retorno in enumerate(retornos[:6]):
                 self.table_retornos.insertRow(linha)
+                self.table_retornos.setRowHeight(linha, 42)
                 self.table_retornos.setItem(linha, 0, QTableWidgetItem(str(retorno.get("paciente_nome", "Paciente")).upper()))
                 data_prevista = str(retorno.get("data_prevista") or "")
                 data_formatada = QDate.fromString(data_prevista, "yyyy-MM-dd")
@@ -373,11 +393,23 @@ class HomeScreen(QWidget):
                     item_data.setForeground(QColor("#dc2626"))
                 self.table_retornos.setItem(linha, 1, item_data)
                 btn_agendar = QPushButton("Agendar")
-                btn_agendar.setStyleSheet("QPushButton { color: #0369a1; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 5px; padding: 4px 7px; font-weight: bold; font-size: 11px; } QPushButton:hover { background: #dbeafe; }")
+                btn_agendar.setFixedSize(88, 30)
+                btn_agendar.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+                btn_agendar.setStyleSheet("QPushButton { color: #0369a1; background: #eff6ff; border: 1px solid #60a5fa; border-radius: 5px; padding: 4px 8px; font-weight: 600; font-size: 11px; } QPushButton:hover { background: #dbeafe; border-color: #0284c7; }")
                 btn_agendar.clicked.connect(lambda checked=False, r=retorno: self.agendar_retorno(r))
-                self.table_retornos.setCellWidget(linha, 2, btn_agendar)
+                # Mantém o botão compacto e centralizado sem deixá-lo ser comprimido.
+                acao = QWidget()
+                layout_acao = QHBoxLayout(acao)
+                layout_acao.setContentsMargins(0, 0, 0, 0)
+                layout_acao.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                layout_acao.addWidget(btn_agendar)
+                self.table_retornos.setCellWidget(linha, 2, acao)
         except Exception as e:
             print(f"Erro ao inicializar tabelas reais da home: {e}")
+        finally:
+            self.table_recentes.setUpdatesEnabled(True)
+            self.table_agenda_resumo.setUpdatesEnabled(True)
+            self.table_retornos.setUpdatesEnabled(True)
 
     def abrir_consulta_da_home(self, linha, _coluna):
         item = self.table_agenda_resumo.item(linha, 0)
@@ -438,7 +470,7 @@ class HomeScreen(QWidget):
                 
             lista.append(nome_limpo)
             self.window_principal.sincronizar_pastas_sistema(lista)
-            self.renderizar_lista_pastas()
+            self.renderizar_lista_pastas(force=True)
 
     def acao_editar_pasta(self, nome_antigo):
         if nome_antigo.lower() == "geral":
@@ -477,7 +509,7 @@ class HomeScreen(QWidget):
             
             self.atualizar_pasta_dos_pacientes_supabase(nome_antigo, nome_limpo)
             self.window_principal.sincronizar_pastas_sistema(lista)
-            self.renderizar_lista_pastas()
+            self.renderizar_lista_pastas(force=True)
 
     def acao_excluir_pasta(self, nome_pasta):
         if nome_pasta.lower() == "geral":
@@ -505,7 +537,7 @@ class HomeScreen(QWidget):
                 
                 self.atualizar_pasta_dos_pacientes_supabase(nome_pasta, "Geral")
                 self.window_principal.sincronizar_pastas_sistema(lista)
-                self.renderizar_lista_pastas()
+                self.renderizar_lista_pastas(force=True)
 
     def atualizar_pasta_dos_pacientes_supabase(self, de_pasta, para_pasta):
         if not self.db.supabase:
@@ -556,6 +588,8 @@ class CardPasta(QFrame):
         super().__init__()
         self.nome_pasta = nome
         self.on_clique_callback = on_clique
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Abrir pacientes desta pasta")
         
         self.setFixedSize(175, 125)
         self.setStyleSheet(f"""

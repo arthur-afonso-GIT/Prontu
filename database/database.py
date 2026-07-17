@@ -375,7 +375,7 @@ class Database:
             print(f"Aviso: falha ao listar auditoria ({type(exc).__name__}).")
             return []
 
-    def criar_retorno(self, paciente_id: int, data_prevista: str, motivo: str = "") -> bool:
+    def criar_retorno(self, paciente_id: int, data_prevista: str | None = None, motivo: str = "") -> bool:
         if not self.supabase or self.consultorio_id is None:
             return False
         try:
@@ -393,6 +393,60 @@ class Database:
             return True
         except Exception as exc:
             print(f"Aviso: falha ao criar retorno ({type(exc).__name__}).")
+            return False
+
+    def criar_retorno_pendente_da_consulta(self, paciente_nome: str) -> bool:
+        """Cria um único retorno pendente após uma consulta comum ser realizada."""
+        if not self.supabase or self.consultorio_id is None or not paciente_nome.strip():
+            return False
+        try:
+            paciente_resp = (
+                self.supabase.table("pacientes")
+                .select("id")
+                .eq("consultorio_id", self.consultorio_id)
+                .ilike("nome", paciente_nome.strip())
+                .is_("deleted_at", "null")
+                .limit(1)
+                .execute()
+            )
+            if not paciente_resp.data:
+                return False
+            paciente_id = paciente_resp.data[0]["id"]
+            existente = (
+                self.supabase.table("retornos_pacientes")
+                .select("id")
+                .eq("consultorio_id", self.consultorio_id)
+                .eq("paciente_id", paciente_id)
+                .in_("status", ["Pendente", "Agendado"])
+                .limit(1)
+                .execute()
+            )
+            if existente.data:
+                return True
+            return self.criar_retorno(
+                paciente_id,
+                None,
+                "",
+            )
+        except Exception as exc:
+            print(f"Aviso: falha ao criar retorno automático ({type(exc).__name__}).")
+            return False
+
+    def definir_data_retorno(self, retorno_id: int, data_prevista: str) -> bool:
+        if not self.supabase or self.consultorio_id is None or not retorno_id or not data_prevista:
+            return False
+        try:
+            self.supabase.table("retornos_pacientes").update({
+                "data_prevista": data_prevista,
+                "status": "Pendente",
+            }).eq("id", retorno_id).eq("consultorio_id", self.consultorio_id).execute()
+            self.registrar_evento_auditoria(
+                "UPDATE", "retornos_pacientes", retorno_id,
+                {"data_prevista": data_prevista},
+            )
+            return True
+        except Exception as exc:
+            print(f"Aviso: falha ao definir data do retorno ({type(exc).__name__}).")
             return False
 
     def listar_retornos_pendentes(self, limite: int = 100) -> list[dict]:

@@ -15,7 +15,7 @@ class FichasDinScreen(QWidget):
         layout.setSpacing(20)
         
         # Cabeçalho
-        title = QLabel("📥 Importador Inteligente de Fichas Antigas")
+        title = QLabel("Importar fichas antigas")
         title.setStyleSheet("font-size: 22px; font-weight: bold; color: #0f172a;")
         layout.addWidget(title)
         
@@ -61,7 +61,7 @@ class FichasDinScreen(QWidget):
         self.txt_preview.setStyleSheet("border: 1px solid #cbd5e1; background-color: #f8fafc; font-size: 13px; color: #334155;")
         preview_layout.addWidget(self.txt_preview)
         
-        self.btn_confirmar_migracao = QPushButton("⚡ Enviar Dados para Formulário de Cadastro")
+        self.btn_confirmar_migracao = QPushButton("Enviar dados para cadastro")
         self.btn_confirmar_migracao.setStyleSheet("""
             QPushButton { background-color: #10b981; color: white; font-weight: bold; padding: 12px; border-radius: 6px; border: none; font-size: 14px; }
             QPushButton:hover { background-color: #059669; }

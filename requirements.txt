@@ -8,3 +8,4 @@ keyring
 pywin32
 python-docx
 pypdf
+openpyxl

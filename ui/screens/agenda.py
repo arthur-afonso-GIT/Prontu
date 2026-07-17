@@ -37,6 +37,7 @@ class AgendaScreen(QWidget):
         self.lista_pacientes_disponiveis = []
         self.db_agendamentos = {}
         self._retorno_em_agendamento = None
+        self._formulario_editado_pelo_usuario = False
         
         self.carregar_agendamentos_db()
         
@@ -245,6 +246,7 @@ class AgendaScreen(QWidget):
         
         self.atualizar_visualizacao_data()
         self.renderizar_timeline_calendario()
+        self._conectar_monitoramento_formulario()
         self._marcar_formulario_salvo()
 
     def carregar_lista_pacientes_combobox(self):
@@ -688,11 +690,27 @@ class AgendaScreen(QWidget):
             self.input_status.currentText(), self.input_obs.text(),
         )
 
+    def _conectar_monitoramento_formulario(self):
+        """Distingue digitação real de preenchimentos automáticos da tela."""
+        self.input_paciente.lineEdit().textEdited.connect(self._registrar_edicao_do_usuario)
+        self.input_hora.activated.connect(self._registrar_edicao_do_usuario)
+        self.input_duracao.activated.connect(self._registrar_edicao_do_usuario)
+        self.input_procedimento.activated.connect(self._registrar_edicao_do_usuario)
+        self.input_status.activated.connect(self._registrar_edicao_do_usuario)
+        self.input_obs.textEdited.connect(self._registrar_edicao_do_usuario)
+
+    def _registrar_edicao_do_usuario(self, *_):
+        self._formulario_editado_pelo_usuario = True
+
     def _marcar_formulario_salvo(self):
         self._estado_formulario_salvo = self._estado_formulario_atual()
+        self._formulario_editado_pelo_usuario = False
 
     def tem_alteracoes_nao_salvas(self):
-        return self._estado_formulario_atual() != getattr(self, "_estado_formulario_salvo", None)
+        return (
+            self._formulario_editado_pelo_usuario
+            and self._estado_formulario_atual() != getattr(self, "_estado_formulario_salvo", None)
+        )
 
     def descartar_alteracoes_nao_salvas(self):
         self.input_paciente.setEditText("")
@@ -738,6 +756,14 @@ class AgendaScreen(QWidget):
             self.input_hora.setCurrentText(hora)
         self.atualizar_visualizacao_data()
         self.renderizar_timeline_calendario()
+        self._marcar_formulario_salvo()
+
+    def abrir_data_do_retorno(self, data_prevista):
+        """Abre a visão diária na data já definida para um retorno."""
+        data = QDate.fromString(str(data_prevista or ""), "yyyy-MM-dd")
+        if not data.isValid():
+            return
+        self.abrir_dia_da_semana(data)
         self._marcar_formulario_salvo()
 
     @staticmethod
@@ -902,7 +928,27 @@ class AgendaScreen(QWidget):
     def _sincronizar_retorno_da_consulta(self, dados, status_consulta):
         """Mantem o retorno vinculado coerente com o destino da consulta."""
         retorno_id = dados.get("retorno_id")
-        if not retorno_id or not hasattr(self.db_gerenciador, "atualizar_status_retorno"):
+        if not retorno_id:
+            # Consultas comuns concluídas geram uma pendência para a equipe decidir
+            # se o paciente terá retorno. Uma consulta de retorno não gera outra.
+            procedimento = str(dados.get("procedimento") or "").strip().lower()
+            if (
+                "Realizada" in status_consulta
+                and procedimento != "retorno"
+                and hasattr(self.db_gerenciador, "criar_retorno_pendente_da_consulta")
+            ):
+                criado = self.db_gerenciador.criar_retorno_pendente_da_consulta(
+                    str(dados.get("paciente") or "")
+                )
+                if not criado:
+                    QMessageBox.warning(
+                        self,
+                        "Retorno não criado",
+                        "A consulta foi marcada como realizada, mas não foi possível criar o retorno pendente. "
+                        "Verifique se a atualização de retornos foi executada no Supabase.",
+                    )
+            return
+        if not hasattr(self.db_gerenciador, "atualizar_status_retorno"):
             return
         if "Realizada" in status_consulta:
             novo_status = "Concluído"

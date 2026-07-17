@@ -184,6 +184,8 @@ class FinanceiroScreen(QWidget):
             print(f"Erro ao carregar financeiro: {e}")
 
     def _renderizar_tabela(self):
+        # A tabela pode ter muitas consultas; desenhar somente ao final evita travadas visuais.
+        self.tabela.setUpdatesEnabled(False)
         self.tabela.setRowCount(0)
         recebido_mes = pendente = 0.0
         mes_atual = QDate.currentDate().toString("MM/yyyy")
@@ -221,6 +223,7 @@ class FinanceiroScreen(QWidget):
         self._definir_card(self.card_recebido, self._moeda(recebido_mes))
         self._definir_card(self.card_pendente, self._moeda(pendente))
         self._definir_card(self.card_consultas, str(len(self.registros)))
+        self.tabela.setUpdatesEnabled(True)
 
     def selecionar_lancamento(self):
         item = self.tabela.currentItem()
