@@ -176,6 +176,12 @@ class ImportarPacientesDialog(QDialog):
         self.campos_presentes = set()
         self.setWindowTitle("Importar pacientes")
         self.setMinimumSize(760, 520)
+        self.setStyleSheet("""
+            QDialog { background-color: #ffffff; }
+            QLabel { color: #334155; background: transparent; }
+            QComboBox { background: #ffffff; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 6px; padding: 7px; }
+            QComboBox QAbstractItemView { background: #ffffff; color: #0f172a; selection-background-color: #e0f2fe; selection-color: #075985; }
+        """)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(22, 20, 22, 20)
@@ -219,7 +225,12 @@ class ImportarPacientesDialog(QDialog):
         self.tabela_previa.verticalHeader().setVisible(False)
         self.tabela_previa.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tabela_previa.setSelectionMode(QTableWidget.NoSelection)
-        self.tabela_previa.setStyleSheet("QTableWidget { background: white; border: 1px solid #cbd5e1; border-radius: 7px; gridline-color: #e2e8f0; } QHeaderView::section { background: #f8fafc; color: #475569; font-weight: bold; padding: 7px; border: none; border-bottom: 1px solid #cbd5e1; }")
+        self.tabela_previa.setStyleSheet("""
+            QTableWidget { background: #ffffff; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 7px; gridline-color: #e2e8f0; }
+            QTableWidget::item { background: #ffffff; color: #0f172a; padding: 7px; }
+            QTableWidget::item:hover { background: #f0f9ff; color: #075985; }
+            QHeaderView::section { background: #f8fafc; color: #475569; font-weight: bold; padding: 7px; border: none; border-bottom: 1px solid #cbd5e1; }
+        """)
         cabecalho = self.tabela_previa.horizontalHeader()
         cabecalho.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         for coluna in range(1, 5):
@@ -237,6 +248,23 @@ class ImportarPacientesDialog(QDialog):
         acoes.addWidget(btn_cancelar)
         acoes.addWidget(self.btn_importar)
         layout.addLayout(acoes)
+
+    def _mensagem(self, icone, titulo, texto, botoes=QMessageBox.StandardButton.Ok, padrao=None):
+        """Mensagens próprias para não herdarem o tema escuro da janela principal."""
+        mensagem = QMessageBox(self)
+        mensagem.setIcon(icone)
+        mensagem.setWindowTitle(titulo)
+        mensagem.setText(texto)
+        mensagem.setStandardButtons(botoes)
+        if padrao is not None:
+            mensagem.setDefaultButton(padrao)
+        mensagem.setStyleSheet("""
+            QMessageBox { background: #ffffff; color: #0f172a; }
+            QLabel { color: #0f172a; background: transparent; font-size: 12px; }
+            QPushButton { background: #0284c7; color: #ffffff; border: 1px solid #0284c7; border-radius: 5px; min-width: 82px; min-height: 28px; padding: 2px 10px; font-weight: bold; }
+            QPushButton:hover { background: #0369a1; }
+        """)
+        return mensagem.exec()
 
     def escolher_arquivo(self):
         caminho, _ = QFileDialog.getOpenFileName(self, "Selecionar planilha de pacientes", "", "Planilhas (*.csv *.xlsx)")
@@ -261,7 +289,7 @@ class ImportarPacientesDialog(QDialog):
         except Exception as erro:
             self.registros_classificados = []
             self.btn_importar.setEnabled(False)
-            QMessageBox.warning(self, "Arquivo não importado", str(erro))
+            self._mensagem(QMessageBox.Icon.Warning, "Arquivo não importado", str(erro))
 
     def atualizar_previa(self):
         if not self.registros_classificados:
@@ -288,7 +316,9 @@ class ImportarPacientesDialog(QDialog):
                 self.tabela_previa.insertRow(linha)
                 valores = [str(dados["_linha"]), dados["nome"], dados["telefone"], dados["cpf"], resultado]
                 for coluna, valor in enumerate(valores):
-                    self.tabela_previa.setItem(linha, coluna, QTableWidgetItem(valor))
+                    celula = QTableWidgetItem(valor)
+                    celula.setForeground(QColor("#0f172a"))
+                    self.tabela_previa.setItem(linha, coluna, celula)
         total = len(self.registros_classificados)
         self.lbl_resumo.setText(f"Planilha analisada: {total} registro(s) válido(s). {novos} novo(s), {atualizados} atualização(ões) e {ignorados} ignorado(s). A prévia mostra os primeiros 12.")
         self.btn_importar.setEnabled(novos + atualizados > 0)
@@ -303,7 +333,14 @@ class ImportarPacientesDialog(QDialog):
         if atualizados:
             texto += f" e atualizar {atualizados} cadastro(s) existente(s)"
         texto += ".\n\nDeseja continuar?"
-        if QMessageBox.question(self, "Confirmar importação", texto, QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+        resposta = self._mensagem(
+            QMessageBox.Icon.Question,
+            "Confirmar importação",
+            texto,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if resposta != QMessageBox.StandardButton.Yes:
             return
 
         if not iniciar_operacao(self.btn_importar, "Importando..."):
@@ -338,9 +375,9 @@ class ImportarPacientesDialog(QDialog):
 
         self.tela_pacientes.carregar_pacientes_tabela()
         if falhas:
-            QMessageBox.warning(self, "Importação parcialmente concluída", f"{adicionados} adicionado(s) e {atualizados_ok} atualizado(s). Ocorreu uma falha; confira os dados e tente novamente.")
+            self._mensagem(QMessageBox.Icon.Warning, "Importação parcialmente concluída", f"{adicionados} adicionado(s) e {atualizados_ok} atualizado(s). Ocorreu uma falha; confira os dados e tente novamente.")
             return
-        QMessageBox.information(self, "Importação concluída", f"{adicionados} paciente(s) adicionado(s) e {atualizados_ok} atualizado(s).")
+        self._mensagem(QMessageBox.Icon.Information, "Importação concluída", f"{adicionados} paciente(s) adicionado(s) e {atualizados_ok} atualizado(s).")
         self.accept()
 
 

@@ -9,7 +9,7 @@ from datetime import datetime
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QPushButton, QComboBox, QScrollArea, 
                                QFrame, QCheckBox, QTextEdit, QFileDialog, QMessageBox, QListView, QDialog,
-                               QDateEdit, QRadioButton, QButtonGroup, QCompleter)
+                               QDateEdit, QRadioButton, QButtonGroup, QCompleter, QFormLayout)
 from PySide6.QtGui import QPixmap, QDesktopServices, QColor, QDoubleValidator, QTextDocument
 from PySide6.QtCore import Qt, QUrl, QDate
 from PySide6.QtPrintSupport import QPrinter
@@ -82,6 +82,143 @@ class CustomInputDialog(QDialog):
 
     def get_text(self):
         return self.input_field.text().strip()
+
+
+class ConfigurarCampoDialog(QDialog):
+    """Configura um campo de ficha com linguagem clínica e opções explícitas."""
+    NOMES_TIPO = {
+        "secao": "Seção", "texto_curto": "Texto curto", "texto_longo": "Texto longo",
+        "checkbox": "Caixa de seleção", "numero": "Número", "data": "Data",
+        "multipla_escolha": "Múltipla escolha",
+    }
+
+    def __init__(self, tipo, campo=None, parent=None):
+        super().__init__(parent)
+        self.tipo = tipo
+        self.campo_original = campo or {}
+        self.setWindowTitle(f"Configurar {self.NOMES_TIPO.get(tipo, 'campo')}")
+        self.setMinimumWidth(500)
+        self.setStyleSheet("""
+            QDialog { background: #ffffff; }
+            QLabel { color: #334155; background: transparent; }
+            QLineEdit, QTextEdit { background: #ffffff; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px; }
+            QLineEdit:focus, QTextEdit:focus { border-color: #0284c7; }
+            QCheckBox { color: #334155; background: transparent; spacing: 7px; }
+            QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #94a3b8; border-radius: 3px; background: #ffffff; }
+            QCheckBox::indicator:checked { background: #0284c7; border-color: #0284c7; }
+            QPushButton { background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 14px; font-weight: bold; }
+            QPushButton:hover { background: #e2e8f0; color: #0f172a; }
+        """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(12)
+
+        titulo = QLabel(f"Configurar {self.NOMES_TIPO.get(tipo, 'campo')}")
+        titulo.setStyleSheet("font-size: 17px; font-weight: bold; color: #0f172a;")
+        layout.addWidget(titulo)
+        explicacoes = {
+            "secao": "Use uma seção para separar visualmente partes da ficha.",
+            "checkbox": "Use para uma informação que pode ser marcada ou desmarcada.",
+            "multipla_escolha": "Cadastre as alternativas que o profissional poderá escolher.",
+            "data": "O campo abre um calendário e também permite digitar a data.",
+        }
+        explicacao = QLabel(explicacoes.get(tipo, "Defina como este campo aparecerá para quem preencher a ficha."))
+        explicacao.setWordWrap(True)
+        explicacao.setStyleSheet("color: #64748b; font-size: 12px;")
+        layout.addWidget(explicacao)
+
+        formulario = QFormLayout()
+        formulario.setSpacing(10)
+        rotulo = "Título da seção:" if tipo == "secao" else "Pergunta / título do campo:"
+        self.input_label = QLineEdit(self.campo_original.get("label", ""))
+        self.input_label.setPlaceholderText("Ex.: Histórico de alergias" if tipo != "secao" else "Ex.: Avaliação clínica")
+        formulario.addRow(rotulo, self.input_label)
+
+        self.input_placeholder = None
+        self.input_unidade = None
+        self.input_checkbox = None
+        self.input_opcoes = None
+        self.chk_hoje = None
+        if tipo in ("texto_curto", "texto_longo"):
+            self.input_placeholder = QLineEdit(self.campo_original.get("placeholder", ""))
+            self.input_placeholder.setPlaceholderText("Texto de ajuda opcional")
+            formulario.addRow("Texto de ajuda:", self.input_placeholder)
+        elif tipo == "numero":
+            self.input_unidade = QLineEdit(self.campo_original.get("unidade", ""))
+            self.input_unidade.setPlaceholderText("Ex.: kg, cm, mmHg")
+            formulario.addRow("Unidade (opcional):", self.input_unidade)
+        elif tipo == "checkbox":
+            self.input_checkbox = QLineEdit(self.campo_original.get("texto_checkbox", ""))
+            self.input_checkbox.setPlaceholderText("Ex.: Paciente confirma esta informação")
+            formulario.addRow("Texto ao lado da caixa:", self.input_checkbox)
+        elif tipo == "multipla_escolha":
+            self.input_opcoes = QTextEdit()
+            self.input_opcoes.setMinimumHeight(100)
+            self.input_opcoes.setPlaceholderText("Uma alternativa por linha\nEx.:\nSim\nNão\nNão sabe informar")
+            self.input_opcoes.setPlainText("\n".join(self.campo_original.get("opcoes", [])))
+            formulario.addRow("Alternativas:", self.input_opcoes)
+        elif tipo == "data":
+            self.chk_hoje = QCheckBox("Preencher automaticamente com a data de hoje")
+            self.chk_hoje.setChecked(bool(self.campo_original.get("preencher_hoje", False)))
+            formulario.addRow("Valor inicial:", self.chk_hoje)
+        layout.addLayout(formulario)
+
+        self.chk_obrigatorio = QCheckBox("Campo obrigatório ao salvar a ficha")
+        self.chk_obrigatorio.setChecked(bool(self.campo_original.get("obrigatorio", False)))
+        self.chk_obrigatorio.setVisible(tipo != "secao")
+        layout.addWidget(self.chk_obrigatorio)
+        self.lbl_erro = QLabel("")
+        self.lbl_erro.setStyleSheet("color: #b91c1c; font-size: 12px;")
+        self.lbl_erro.setVisible(False)
+        layout.addWidget(self.lbl_erro)
+
+        botoes = QHBoxLayout()
+        btn_cancelar = QPushButton("Cancelar")
+        btn_cancelar.setStyleSheet("QPushButton { background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 14px; font-weight: bold; } QPushButton:hover { background: #e2e8f0; color: #0f172a; }")
+        btn_cancelar.clicked.connect(self.reject)
+        btn_salvar = QPushButton("Salvar campo")
+        btn_salvar.setStyleSheet("QPushButton { background: #0284c7; color: white; border: none; border-radius: 6px; padding: 8px 14px; font-weight: bold; } QPushButton:hover { background: #0369a1; }")
+        btn_salvar.clicked.connect(self.validar_e_aceitar)
+        botoes.addStretch()
+        botoes.addWidget(btn_cancelar)
+        botoes.addWidget(btn_salvar)
+        layout.addLayout(botoes)
+
+    def validar_e_aceitar(self):
+        if not self.input_label.text().strip():
+            self.lbl_erro.setText("Informe um título para continuar.")
+            self.lbl_erro.setVisible(True)
+            return
+        if self.tipo == "checkbox" and not self.input_checkbox.text().strip():
+            self.lbl_erro.setText("Explique o que a pessoa estará marcando.")
+            self.lbl_erro.setVisible(True)
+            return
+        if self.tipo == "multipla_escolha" and len(self.opcoes()) < 2:
+            self.lbl_erro.setText("Cadastre pelo menos duas alternativas, uma por linha.")
+            self.lbl_erro.setVisible(True)
+            return
+        self.accept()
+
+    def opcoes(self):
+        return [linha.strip() for linha in self.input_opcoes.toPlainText().splitlines() if linha.strip()] if self.input_opcoes else []
+
+    def obter_campo(self):
+        campo = dict(self.campo_original)
+        campo["tipo"] = self.tipo
+        campo["label"] = self.input_label.text().strip()
+        if self.tipo != "secao":
+            campo["obrigatorio"] = self.chk_obrigatorio.isChecked()
+        if self.input_placeholder is not None:
+            campo["placeholder"] = self.input_placeholder.text().strip()
+        if self.input_unidade is not None:
+            campo["unidade"] = self.input_unidade.text().strip()
+        if self.input_checkbox is not None:
+            campo["texto_checkbox"] = self.input_checkbox.text().strip()
+        if self.input_opcoes is not None:
+            campo["opcoes"] = self.opcoes()
+        if self.chk_hoje is not None:
+            campo["preencher_hoje"] = self.chk_hoje.isChecked()
+        return campo
 
 
 class FichasScreen(QWidget):
@@ -357,7 +494,8 @@ class FichasScreen(QWidget):
                     .execute()
                     
                 if resposta.data:
-                    self.modelo_atual_campos = json.loads(resposta.data["estrutura_json"])
+                    estrutura = resposta.data["estrutura_json"]
+                    self.modelo_atual_campos = estrutura if isinstance(estrutura, list) else json.loads(estrutura or "[]")
                     self.renderizar_formulario_dinamico()
             except Exception as e:
                 print(f"Erro ao obter modelo de ficha: {e}")
@@ -374,7 +512,9 @@ class FichasScreen(QWidget):
                 .eq("nome_modelo", nome_modelo)\
                 .maybe_single().execute()
             if resposta.data:
-                self.iniciar_criacao_modelo(json.loads(resposta.data["estrutura_json"]), origem=nome_modelo)
+                estrutura = resposta.data["estrutura_json"]
+                campos = estrutura if isinstance(estrutura, list) else json.loads(estrutura or "[]")
+                self.iniciar_criacao_modelo(campos, origem=nome_modelo)
         except Exception as e:
             self.exibir_popup("erro", "Não foi possível abrir", "Não foi possível abrir esse modelo para edição.")
 
@@ -547,13 +687,24 @@ class FichasScreen(QWidget):
             {"tipo": "secao", "label": "Avaliacao"},
             {"tipo": "texto_longo", "label": "Historico e observacoes", "id": "historico_observacoes"},
             {"tipo": "numero", "label": "Peso", "id": "peso", "unidade": "kg"},
-            {"tipo": "data", "label": "Data do atendimento", "id": "data_atendimento"},
+            {"tipo": "data", "label": "Data do atendimento", "id": "data_atendimento", "preencher_hoje": True},
             {"tipo": "secao", "label": "Plano"},
             {"tipo": "texto_longo", "label": "Conduta e orientacoes", "id": "conduta_orientacoes"},
         ]
         self.atualizar_visualizacao_preview()
 
     def adicionar_elemento_rascunho(self, tipo):
+        dialogo = ConfigurarCampoDialog(tipo, parent=self)
+        if dialogo.exec() != QDialog.DialogCode.Accepted:
+            return
+        novo_campo = dialogo.obter_campo()
+        if tipo != "secao":
+            texto_limpo = "".join(c for c in novo_campo["label"] if c.isalnum()).lower()
+            novo_campo["id"] = f"custom_{uuid.uuid4().hex[:8]}_{texto_limpo[:30]}"
+        self.modelo_atual_campos.append(novo_campo)
+        self.atualizar_visualizacao_preview()
+        return
+
         titulos = {
             "secao": "Nova Seção",
             "numero": "Novo Campo Numérico",
@@ -671,6 +822,10 @@ class FichasScreen(QWidget):
                 inp.setStyleSheet(estilo_input_curto)
                 conteudo_layout.addWidget(lbl)
                 conteudo_layout.addWidget(inp)
+                if campo.get("placeholder"):
+                    ajuda = QLabel(campo["placeholder"])
+                    ajuda.setStyleSheet("color: #64748b; font-size: 11px; background: transparent;")
+                    conteudo_layout.addWidget(ajuda)
 
             elif tipo == "texto_longo":
                 lbl = QLabel(label)
@@ -683,9 +838,18 @@ class FichasScreen(QWidget):
                 inp.setStyleSheet(estilo_input_longo)
                 conteudo_layout.addWidget(lbl)
                 conteudo_layout.addWidget(inp)
+                if campo.get("placeholder"):
+                    ajuda = QLabel(campo["placeholder"])
+                    ajuda.setStyleSheet("color: #64748b; font-size: 11px; background: transparent;")
+                    conteudo_layout.addWidget(ajuda)
 
             elif tipo == "checkbox":
-                chk = QCheckBox(label)
+                texto_checkbox = campo.get("texto_checkbox") or label
+                if texto_checkbox != label:
+                    lbl = QLabel(label)
+                    lbl.setStyleSheet(estilo_label)
+                    conteudo_layout.addWidget(lbl)
+                chk = QCheckBox(texto_checkbox)
                 chk.setEnabled(False)
                 chk.setStyleSheet("QCheckBox { color: #0f172a !important; font-size: 13px; font-weight: 500; padding: 4px; background-color: transparent; }")
                 conteudo_layout.addWidget(chk)
@@ -706,7 +870,10 @@ class FichasScreen(QWidget):
                 lbl.setStyleSheet(estilo_label)
                 inp = QDateEdit()
                 inp.setCalendarPopup(True)
-                inp.setDate(QDate.currentDate())
+                inp.setDisplayFormat("dd/MM/yyyy")
+                inp.setMinimumDate(QDate(1900, 1, 1))
+                inp.setSpecialValueText("Selecione uma data")
+                inp.setDate(QDate.currentDate() if campo.get("preencher_hoje") else inp.minimumDate())
                 inp.setEnabled(False)
                 inp.setStyleSheet("QDateEdit { background-color: #f8fafc !important; color: #0f172a !important; border: 1px solid #cbd5e1 !important; border-radius: 6px; padding: 6px 10px; font-size: 13px; }")
                 conteudo_layout.addWidget(lbl)
@@ -803,6 +970,14 @@ class FichasScreen(QWidget):
         self.atualizar_visualizacao_preview()
 
     def editar_campo_rascunho(self, indice):
+        if not (0 <= indice < len(self.modelo_atual_campos)):
+            return
+        campo = self.modelo_atual_campos[indice]
+        dialogo = ConfigurarCampoDialog(campo.get("tipo"), campo, self)
+        if dialogo.exec() == QDialog.DialogCode.Accepted:
+            self.modelo_atual_campos[indice] = dialogo.obter_campo()
+            self.atualizar_visualizacao_preview()
+        return
         """Abre um diálogo pré-preenchido para renomear o rótulo do campo/seção."""
         if not (0 <= indice < len(self.modelo_atual_campos)):
             return
@@ -835,8 +1010,6 @@ class FichasScreen(QWidget):
         else:
             return
             
-        estrutura_json = json.dumps(self.modelo_atual_campos, ensure_ascii=False)
-        
         if not self.db.supabase:
             return
             
@@ -844,14 +1017,18 @@ class FichasScreen(QWidget):
             payload = {
                 "consultorio_id": self.db.consultorio_id,
                 "nome_modelo": nome_modelo,
-                "estrutura_json": estrutura_json
+                "estrutura_json": self.modelo_atual_campos
             }
             
             # Executa o upsert para evitar duplicações de modelos dentro do mesmo consultório
-            self.db.supabase.table("modelos_fichas").upsert(
-                payload, 
-                on_conflict="consultorio_id,nome_modelo"
-            ).execute()
+            existente = self.db.supabase.table("modelos_fichas").select("id") \
+                .eq("consultorio_id", self.db.consultorio_id) \
+                .eq("nome_modelo", nome_modelo).maybe_single().execute()
+            if existente.data:
+                self.db.supabase.table("modelos_fichas").update({"estrutura_json": self.modelo_atual_campos}) \
+                    .eq("id", existente.data["id"]).eq("consultorio_id", self.db.consultorio_id).execute()
+            else:
+                self.db.supabase.table("modelos_fichas").insert(payload).execute()
             
             self.modo_criacao = False
             self._nome_modelo_importado = None
@@ -1290,6 +1467,10 @@ class FichasScreen(QWidget):
                 if "placeholder" in campo: inp.setPlaceholderText(campo["placeholder"])
                 self.dinamic_form_layout.addWidget(lbl)
                 self.dinamic_form_layout.addWidget(inp)
+                if campo.get("placeholder"):
+                    ajuda = QLabel(campo["placeholder"])
+                    ajuda.setStyleSheet("color: #64748b; font-size: 11px; background: transparent;")
+                    self.dinamic_form_layout.addWidget(ajuda)
                 self.widgets_dinamicos[id_campo] = ("texto_curto", inp)
                 inp.textChanged.connect(self._marcar_formulario_sujo)
                 
@@ -1300,13 +1481,24 @@ class FichasScreen(QWidget):
                 inp.setMinimumHeight(65)
                 inp.setMaximumHeight(120)
                 inp.setStyleSheet(estilo_input_longo)
+                if campo.get("placeholder"):
+                    inp.setPlaceholderText(campo["placeholder"])
                 self.dinamic_form_layout.addWidget(lbl)
                 self.dinamic_form_layout.addWidget(inp)
+                if campo.get("placeholder"):
+                    ajuda = QLabel(campo["placeholder"])
+                    ajuda.setStyleSheet("color: #64748b; font-size: 11px; background: transparent;")
+                    self.dinamic_form_layout.addWidget(ajuda)
                 self.widgets_dinamicos[id_campo] = ("texto_longo", inp)
                 inp.textChanged.connect(self._marcar_formulario_sujo)
                 
             elif tipo == "checkbox":
-                chk = QCheckBox(label)
+                texto_checkbox = campo.get("texto_checkbox") or label
+                if texto_checkbox != label:
+                    lbl = QLabel(label)
+                    lbl.setStyleSheet(estilo_label)
+                    self.dinamic_form_layout.addWidget(lbl)
+                chk = QCheckBox(texto_checkbox)
                 chk.setStyleSheet("QCheckBox { color: #0f172a !important; font-size: 13px; font-weight: 500; padding: 4px; background-color: transparent; }")
                 self.dinamic_form_layout.addWidget(chk)
                 self.widgets_dinamicos[id_campo] = ("checkbox", chk)
@@ -1331,7 +1523,9 @@ class FichasScreen(QWidget):
                 inp = QDateEdit()
                 inp.setCalendarPopup(True)
                 inp.setDisplayFormat("dd/MM/yyyy")
-                inp.setDate(QDate.currentDate())
+                inp.setMinimumDate(QDate(1900, 1, 1))
+                inp.setSpecialValueText("Selecione uma data")
+                inp.setDate(QDate.currentDate() if campo.get("preencher_hoje") else inp.minimumDate())
                 inp.setStyleSheet("QDateEdit { background-color: #ffffff !important; color: #0f172a !important; border: 1px solid #cbd5e1 !important; border-radius: 6px; padding: 7px 10px; font-size: 13px; }")
                 self.dinamic_form_layout.addWidget(lbl)
                 self.dinamic_form_layout.addWidget(inp)
@@ -1385,7 +1579,7 @@ class FichasScreen(QWidget):
             elif tipo == "checkbox":
                 valor = "Sim" if widget.isChecked() else "Não"
             elif tipo == "data":
-                valor = widget.date().toString("dd/MM/yyyy")
+                valor = "" if widget.date() == widget.minimumDate() else widget.date().toString("dd/MM/yyyy")
             elif tipo == "multipla_escolha":
                 marcado = widget.checkedButton()
                 valor = marcado.text() if marcado else ""
@@ -1517,10 +1711,19 @@ class FichasScreen(QWidget):
             elif tipo == "texto_longo": respostas[id_campo] = widget.toPlainText().strip()
             elif tipo == "checkbox": respostas[id_campo] = widget.isChecked()
             elif tipo == "numero": respostas[id_campo] = widget.text().strip()
-            elif tipo == "data": respostas[id_campo] = widget.date().toString("dd/MM/yyyy")
+            elif tipo == "data": respostas[id_campo] = "" if widget.date() == widget.minimumDate() else widget.date().toString("dd/MM/yyyy")
             elif tipo == "multipla_escolha":
                 botao_marcado = widget.checkedButton()
                 respostas[id_campo] = botao_marcado.text() if botao_marcado else ""
+
+        obrigatorios_vazios = [
+            campo.get("label", "Campo")
+            for campo in self.modelo_atual_campos
+            if campo.get("obrigatorio") and not respostas.get(campo.get("id"))
+        ]
+        if obrigatorios_vazios:
+            self.exibir_popup("aviso", "Campos obrigatórios", "Preencha antes de salvar: " + ", ".join(obrigatorios_vazios) + ".")
+            return
                 
         modelo_nome = self.combo_modelo.currentText()
         data_atual = self._data_atendimento_original or datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -1563,12 +1766,13 @@ class FichasScreen(QWidget):
                         .execute()
             
             # Limpa os campos após salvar com sucesso
-            for tipo, widget in self.widgets_dinamicos.values():
+            campos_por_id = {campo.get("id"): campo for campo in self.modelo_atual_campos}
+            for campo_id, (tipo, widget) in self.widgets_dinamicos.items():
                 if tipo == "texto_curto": widget.clear()
                 elif tipo == "texto_longo": widget.clear()
                 elif tipo == "checkbox": widget.setChecked(False)
                 elif tipo == "numero": widget.clear()
-                elif tipo == "data": widget.setDate(QDate.currentDate())
+                elif tipo == "data": widget.setDate(QDate.currentDate() if campos_por_id.get(campo_id, {}).get("preencher_hoje") else widget.minimumDate())
                 elif tipo == "multipla_escolha": widget.setExclusive(False); [b.setChecked(False) for b in widget.buttons()]; widget.setExclusive(True)
 
             self.arquivos_anexados = []
