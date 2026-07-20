@@ -6,12 +6,95 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QFrame, QMessageBox,
                                QComboBox, QCheckBox, QFileDialog, QInputDialog,
                                QSpinBox, QDialog, QTableWidget, QTableWidgetItem,
-                               QHeaderView)
+                               QHeaderView, QTextEdit)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
+from ui.design_system import definir_variante
 
 from services.backup_service import BackupService
 from services.backup_worker import BackupWorker
+
+
+MENSAGEM_WHATSAPP_MANUAL_PADRAO = (
+    "Olá, {paciente}! Tudo bem? Aqui é {profissional}, da clínica. "
+    "Como podemos ajudar?"
+)
+MENSAGEM_LEMBRETE_CONSULTA_PADRAO = (
+    "Olá, {paciente}! Lembramos que sua consulta está marcada para {data} às {hora}. "
+    "Procedimento: {procedimento}. Por favor, confirme sua presença."
+)
+
+
+class MensagensWhatsAppDialog(QDialog):
+    """Centraliza os textos usados manualmente e pela futura automação."""
+
+    def __init__(self, database, parent=None):
+        super().__init__(parent)
+        self.db = database
+        self.setWindowTitle("Mensagens do WhatsApp")
+        self.setMinimumWidth(590)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(10)
+
+        titulo = QLabel("Mensagens do WhatsApp")
+        titulo.setStyleSheet("font-size: 18px; font-weight: 700; color: #0f172a;")
+        layout.addWidget(titulo)
+        explicacao = QLabel(
+            "Use {paciente} e {profissional} na mensagem manual. "
+            "No lembrete, também estão disponíveis {data}, {hora} e {procedimento}."
+        )
+        explicacao.setWordWrap(True)
+        explicacao.setStyleSheet("color: #64748b; font-size: 12px;")
+        layout.addWidget(explicacao)
+
+        layout.addWidget(QLabel("Mensagem ao clicar no botão Zap:"))
+        self.input_manual = QTextEdit()
+        self.input_manual.setMinimumHeight(92)
+        self.input_manual.setPlaceholderText(MENSAGEM_WHATSAPP_MANUAL_PADRAO)
+        layout.addWidget(self.input_manual)
+
+        layout.addWidget(QLabel("Mensagem de lembrete de consulta (para automação futura):"))
+        self.input_lembrete = QTextEdit()
+        self.input_lembrete.setMinimumHeight(108)
+        self.input_lembrete.setPlaceholderText(MENSAGEM_LEMBRETE_CONSULTA_PADRAO)
+        layout.addWidget(self.input_lembrete)
+
+        botoes = QHBoxLayout()
+        botoes.addStretch()
+        cancelar = QPushButton("Cancelar")
+        salvar = QPushButton("Salvar mensagens")
+        definir_variante(salvar, "primary")
+        cancelar.clicked.connect(self.reject)
+        salvar.clicked.connect(self.salvar)
+        botoes.addWidget(cancelar)
+        botoes.addWidget(salvar)
+        layout.addLayout(botoes)
+        self.carregar()
+
+    def carregar(self):
+        valores = self.db.obter_configuracoes([
+            "whatsapp_mensagem_manual", "whatsapp_mensagem_lembrete",
+        ])
+        self.input_manual.setPlainText(
+            valores.get("whatsapp_mensagem_manual") or MENSAGEM_WHATSAPP_MANUAL_PADRAO
+        )
+        self.input_lembrete.setPlainText(
+            valores.get("whatsapp_mensagem_lembrete") or MENSAGEM_LEMBRETE_CONSULTA_PADRAO
+        )
+
+    def salvar(self):
+        manual = self.input_manual.toPlainText().strip()
+        lembrete = self.input_lembrete.toPlainText().strip()
+        if not manual or not lembrete:
+            QMessageBox.warning(self, "Mensagens incompletas", "Preencha as duas mensagens antes de salvar.")
+            return
+        ok_manual = self.db.salvar_configuracao("whatsapp_mensagem_manual", manual)
+        ok_lembrete = self.db.salvar_configuracao("whatsapp_mensagem_lembrete", lembrete)
+        if not (ok_manual and ok_lembrete):
+            QMessageBox.warning(self, "Não foi possível salvar", "As mensagens não foram salvas. Tente novamente.")
+            return
+        self.accept()
 
 
 def configurar_visibilidade_senha(campo: QLineEdit) -> None:
@@ -73,7 +156,6 @@ class HistoricoAuditoriaDialog(QDialog):
         self.eventos = []
         self.setWindowTitle("Histórico de Auditoria")
         self.resize(900, 560)
-        self.setStyleSheet("QDialog { background: #f8fafc; }")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(22, 22, 22, 22)
@@ -103,6 +185,7 @@ class HistoricoAuditoriaDialog(QDialog):
         filtros.addWidget(self.combo_area)
         filtros.addStretch()
         btn_atualizar = QPushButton("Atualizar")
+        definir_variante(btn_atualizar, "secondary")
         btn_atualizar.clicked.connect(self.carregar_eventos)
         filtros.addWidget(btn_atualizar)
         layout.addLayout(filtros)
@@ -113,12 +196,6 @@ class HistoricoAuditoriaDialog(QDialog):
         self.tabela.verticalHeader().setVisible(False)
         self.tabela.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tabela.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.tabela.setStyleSheet(
-            "QTableWidget { background: white; color: #334155; border: 1px solid #e2e8f0; border-radius: 8px; } "
-            "QTableWidget::item { padding: 8px; } "
-            "QHeaderView::section { background: #f1f5f9; color: #475569; border: none; "
-            "border-bottom: 1px solid #e2e8f0; padding: 8px; font-weight: bold; }"
-        )
         cabecalho = self.tabela.horizontalHeader()
         cabecalho.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         cabecalho.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -206,6 +283,7 @@ class HistoricoAuditoriaDialog(QDialog):
 class ConfiguracoesScreen(QWidget):
     def __init__(self, window_principal=None):
         super().__init__()
+        self.setObjectName("ConfiguracoesScreen")
         self.window_principal = window_principal
         self.db = window_principal.db if window_principal else None
         self._backup_worker = None
@@ -215,8 +293,8 @@ class ConfiguracoesScreen(QWidget):
         
         # Layout Principal com margens confortáveis
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(30, 30, 30, 30)
-        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(24, 24, 24, 24)
+        main_layout.setSpacing(18)
         
         # --- CABEÇALHO ---
         lbl_titulo = QLabel("⚙️ Configurações do Sistema")
@@ -229,10 +307,7 @@ class ConfiguracoesScreen(QWidget):
 
         # --- RESUMO DO PLANO ---
         container_assinatura = QFrame()
-        container_assinatura.setStyleSheet("""
-            QFrame { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; }
-            QLabel { border: none; }
-        """)
+        container_assinatura.setObjectName("SectionCard")
         assinatura_layout = QHBoxLayout(container_assinatura)
         assinatura_layout.setContentsMargins(18, 12, 18, 12)
         assinatura_layout.setSpacing(10)
@@ -255,10 +330,7 @@ class ConfiguracoesScreen(QWidget):
         
         # --- PAINEL DE PERFIL DO PROFISSIONAL ---
         container_perfil = QFrame()
-        container_perfil.setStyleSheet("""
-            QFrame { background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; }
-            QLabel { color: #334155; font-weight: 500; font-size: 13px; border: none; }
-        """)
+        container_perfil.setObjectName("FormCard")
         
         perfil_layout = QVBoxLayout(container_perfil)
         perfil_layout.setContentsMargins(20, 20, 20, 20)
@@ -271,20 +343,12 @@ class ConfiguracoesScreen(QWidget):
         perfil_layout.addWidget(QLabel("Nome do Profissional (Ex: Dra. Laura Silva, Dr. Carlos):"))
         self.input_nome = QLineEdit()
         self.input_nome.setPlaceholderText("Digite como deseja ser saudado na página inicial...")
-        self.input_nome.setStyleSheet("""
-            QLineEdit { padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; background-color: #f8fafc; color: #0f172a; font-size: 13px; }
-            QLineEdit:focus { border: 1px solid #0284c7; background-color: white; }
-        """)
         perfil_layout.addWidget(self.input_nome)
         
         # Layout inferior para botões de ação
         btn_layout = QHBoxLayout()
         self.btn_auditoria = QPushButton("Histórico de Auditoria")
-        self.btn_auditoria.setStyleSheet(
-            "QPushButton { background-color: #eff6ff; color: #0369a1; border: 1px solid #93c5fd; "
-            "padding: 10px 16px; font-weight: bold; border-radius: 6px; font-size: 13px; } "
-            "QPushButton:hover { background-color: #dbeafe; }"
-        )
+        definir_variante(self.btn_auditoria, "secondary")
         self.btn_auditoria.clicked.connect(self.abrir_historico_auditoria)
         self.btn_auditoria.setVisible(
             bool(self.db) and self.db.obter_papel_atual() == "proprietario"
@@ -293,35 +357,39 @@ class ConfiguracoesScreen(QWidget):
         btn_layout.addStretch()
         
         self.btn_salvar = QPushButton("💾 Salvar Alterações")
-        self.btn_salvar.setStyleSheet("""
-            QPushButton { background-color: #0284c7; color: white; padding: 10px 20px; font-weight: bold; border-radius: 6px; border: none; font-size: 13px; }
-            QPushButton:hover { background-color: #0369a1; }
-        """)
+        definir_variante(self.btn_salvar, "primary")
         self.btn_salvar.clicked.connect(self.salvar_configuracoes)
         btn_layout.addWidget(self.btn_salvar)
         
         perfil_layout.addLayout(btn_layout)
         main_layout.addWidget(container_perfil)
 
+        # --- MENSAGENS DO WHATSAPP ---
+        container_mensagens = QFrame()
+        container_mensagens.setObjectName("FormCard")
+        mensagens_layout = QHBoxLayout(container_mensagens)
+        mensagens_layout.setContentsMargins(20, 16, 20, 16)
+        mensagens_layout.setSpacing(14)
+        texto_mensagens = QVBoxLayout()
+        titulo_mensagens = QLabel("Mensagens do WhatsApp")
+        titulo_mensagens.setStyleSheet("font-size: 16px; font-weight: bold; color: #0f172a;")
+        descricao_mensagens = QLabel(
+            "Personalize o texto enviado pelo botão Zap e deixe o lembrete automático pronto para quando ele for ativado."
+        )
+        descricao_mensagens.setWordWrap(True)
+        descricao_mensagens.setStyleSheet("color: #64748b; font-size: 12px;")
+        texto_mensagens.addWidget(titulo_mensagens)
+        texto_mensagens.addWidget(descricao_mensagens)
+        mensagens_layout.addLayout(texto_mensagens, 1)
+        btn_mensagens = QPushButton("Configurar mensagens")
+        definir_variante(btn_mensagens, "secondary")
+        btn_mensagens.clicked.connect(self.abrir_configuracao_mensagens)
+        mensagens_layout.addWidget(btn_mensagens)
+        main_layout.addWidget(container_mensagens)
+
         # --- PAINEL DE BACKUP LOCAL CRIPTOGRAFADO ---
         container_backup = QFrame()
-        container_backup.setStyleSheet("""
-            QFrame { background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; }
-            QLabel { color: #334155; font-weight: 500; font-size: 13px; border: none; }
-            QLineEdit, QComboBox, QSpinBox {
-                min-height: 34px; padding: 4px 10px; color: #0f172a;
-                background-color: #ffffff; border: 1px solid #94a3b8; border-radius: 6px;
-            }
-            QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border: 2px solid #0284c7; }
-            QComboBox::drop-down { width: 28px; border: none; }
-            QComboBox QAbstractItemView { color: #0f172a; background: #ffffff; selection-background-color: #bae6fd; }
-            QCheckBox { color: #334155; spacing: 8px; }
-            QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #64748b; border-radius: 3px; background: #ffffff; }
-            QCheckBox::indicator:checked { background: #0284c7; border-color: #0284c7; }
-            QPushButton { min-height: 30px; padding: 3px 12px; color: #ffffff; background-color: #0284c7; border: none; border-radius: 6px; font-weight: 600; }
-            QPushButton:hover { background-color: #0369a1; }
-            QPushButton:disabled { background-color: #94a3b8; }
-        """)
+        container_backup.setObjectName("FormCard")
         backup_layout = QVBoxLayout(container_backup)
         backup_layout.setContentsMargins(20, 20, 20, 20)
         backup_layout.setSpacing(10)
@@ -340,6 +408,7 @@ class ConfiguracoesScreen(QWidget):
         self.input_backup_dir.mousePressEvent = self._abrir_seletor_pasta_backup
         btn_escolher_pasta = QPushButton("Escolher...")
         btn_escolher_pasta.setFixedWidth(100)
+        definir_variante(btn_escolher_pasta, "secondary")
         btn_escolher_pasta.clicked.connect(self._escolher_pasta_backup)
         pasta_row.addWidget(self.input_backup_dir)
         pasta_row.addWidget(btn_escolher_pasta)
@@ -379,16 +448,15 @@ class ConfiguracoesScreen(QWidget):
         btn_backup_row = QHBoxLayout()
         self.btn_backup_agora = QPushButton("Executar backup agora")
         self.btn_backup_agora.setFixedWidth(155)
+        definir_variante(self.btn_backup_agora, "primary")
         self.btn_backup_agora.clicked.connect(self._executar_backup_manual)
         self.btn_restaurar = QPushButton("Restaurar backup...")
         self.btn_restaurar.setFixedWidth(140)
+        definir_variante(self.btn_restaurar, "secondary")
         self.btn_restaurar.clicked.connect(self._restaurar_backup)
         self.btn_desativar = QPushButton("Desativar dispositivo")
         self.btn_desativar.setFixedWidth(155)
-        self.btn_desativar.setStyleSheet(
-            "QPushButton { background-color: #ffffff; color: #b91c1c; border: 1px solid #fca5a5; } "
-            "QPushButton:hover { background-color: #fef2f2; }"
-        )
+        definir_variante(self.btn_desativar, "danger")
         self.btn_desativar.clicked.connect(self._desativar_dispositivo)
         btn_backup_row.addWidget(self.btn_backup_agora)
         btn_backup_row.addWidget(self.btn_restaurar)
@@ -606,6 +674,13 @@ class ConfiguracoesScreen(QWidget):
             return
         self.db.desativar_dispositivo()
         QMessageBox.information(self, "Desativado", "Dispositivo desativado. Reinicie o aplicativo.")
+
+    def abrir_configuracao_mensagens(self):
+        if not self.db:
+            return
+        dialogo = MensagensWhatsAppDialog(self.db, self)
+        if dialogo.exec() == QDialog.DialogCode.Accepted:
+            QMessageBox.information(self, "Mensagens salvas", "As mensagens do WhatsApp foram atualizadas.")
 
     def carregar_dados_configurados(self):
         """Busca do banco de dados e preenche os campos."""

@@ -5,10 +5,12 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QInputDialog, QMessageBox, QTableWidgetItem, QColorDialog)
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor
+from ui.design_system import definir_variante
 from ui.screens.pacientes import normalizar_nome_pasta
 class HomeScreen(QWidget):
     def __init__(self, window_principal, on_novo_paciente_click=None, on_pasta_click=None, on_agendar_retorno_click=None, on_consulta_click=None):
         super().__init__()
+        self.setObjectName("HomeScreen")
         
         self.window_principal = window_principal
         self.on_novo_paciente_click = on_novo_paciente_click
@@ -41,10 +43,7 @@ class HomeScreen(QWidget):
         header_layout.addLayout(welcome_vbox)
         
         btn_novo_paciente = QPushButton("➕ Novo Paciente")
-        btn_novo_paciente.setStyleSheet("""
-            QPushButton { background-color: #0284c7; color: white; padding: 10px 18px; font-weight: bold; border-radius: 6px; font-size: 13px; border: none; }
-            QPushButton:hover { background-color: #0369a1; }
-        """)
+        definir_variante(btn_novo_paciente, "primary")
         if self.on_novo_paciente_click:
             btn_novo_paciente.clicked.connect(self.on_novo_paciente_click)
         header_layout.addWidget(btn_novo_paciente, alignment=Qt.AlignmentFlag.AlignRight)
@@ -74,11 +73,7 @@ class HomeScreen(QWidget):
         lbl_pastas_titulo.setStyleSheet("font-size: 16px; font-weight: bold; color: #1e293b;")
         
         btn_add_pasta = QPushButton("Nova pasta")
-        btn_add_pasta.setStyleSheet("""
-            QPushButton { background-color: #dbeafe; color: #075985; padding: 7px 14px; border: 1px solid #7dd3fc; border-radius: 6px; font-weight: 700; font-size: 12px; }
-            QPushButton:hover { background-color: #bae6fd; border-color: #0ea5e9; color: #0c4a6e; }
-            QPushButton:pressed { background-color: #a5f3fc; }
-        """)
+        definir_variante(btn_add_pasta, "secondary")
         btn_add_pasta.clicked.connect(self.acao_criar_nova_pasta)
         
         pastas_header.addWidget(lbl_pastas_titulo)
@@ -116,12 +111,6 @@ class HomeScreen(QWidget):
         self.table_agenda_resumo.viewport().setMouseTracking(True)
         self.table_agenda_resumo.setCursor(Qt.CursorShape.PointingHandCursor)
         self.table_agenda_resumo.setFixedHeight(210)
-        self.table_agenda_resumo.setStyleSheet("""
-            QTableWidget { background-color: white; border: 1px solid #cbd5e1; border-radius: 8px; gridline-color: #cbd5e1; font-size: 13px; color: #334155; }
-            QTableWidget::item { border-bottom: 1px solid #cbd5e1; padding: 6px; }
-            QTableWidget::item:hover { background-color: #eff6ff; color: #0369a1; }
-            QHeaderView::section { background-color: #f8fafc; font-weight: bold; color: #64748b; border: none; padding: 6px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: left; }
-        """)
         h_agenda = self.table_agenda_resumo.horizontalHeader()
         h_agenda.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         h_agenda.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -140,20 +129,15 @@ class HomeScreen(QWidget):
         self.table_retornos.setColumnCount(3)
         self.table_retornos.setHorizontalHeaderLabels(["Paciente", "Previsto", "Ação"])
         self.table_retornos.verticalHeader().setVisible(False)
-        self.table_retornos.verticalHeader().setDefaultSectionSize(42)
+        self.table_retornos.verticalHeader().setDefaultSectionSize(46)
         self.table_retornos.setShowGrid(True)
         self.table_retornos.setFixedHeight(210)
         self.table_retornos.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table_retornos.setStyleSheet("""
-            QTableWidget { background-color: white; border: 1px solid #cbd5e1; border-radius: 8px; gridline-color: #cbd5e1; font-size: 12px; color: #334155; }
-            QTableWidget::item { border-bottom: 1px solid #cbd5e1; padding: 6px; }
-            QHeaderView::section { background-color: #f8fafc; font-weight: bold; color: #64748b; border: none; padding: 6px; border-bottom: 1px solid #e2e8f0; font-size: 11px; }
-        """)
         h_retornos = self.table_retornos.horizontalHeader()
         h_retornos.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         h_retornos.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         h_retornos.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self.table_retornos.setColumnWidth(2, 118)
+        self.table_retornos.setColumnWidth(2, 128)
         retornos_vbox.addWidget(self.table_retornos)
         split_tables_layout.addLayout(retornos_vbox, stretch=1)
         
@@ -176,13 +160,6 @@ class HomeScreen(QWidget):
         self.table_recentes.setMouseTracking(True)
         self.table_recentes.viewport().setMouseTracking(True)
         self.table_recentes.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.table_recentes.setStyleSheet("""
-            QTableWidget { background-color: white; border: 1px solid #cbd5e1; border-radius: 8px; gridline-color: #cbd5e1; font-size: 13px; color: #334155; }
-            QTableWidget::item { border-bottom: 1px solid #cbd5e1; padding: 6px; }
-            QTableWidget::item:hover { background-color: #eff6ff; color: #0369a1; }
-            QTableWidget::item:selected { background-color: #e0f2fe; color: #0f172a; }
-            QHeaderView::section { background-color: #f8fafc; font-weight: bold; color: #64748b; border: none; padding: 6px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: left; }
-        """)
         h_rec = self.table_recentes.horizontalHeader()
         h_rec.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         h_rec.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -381,7 +358,7 @@ class HomeScreen(QWidget):
             hoje = QDate.currentDate().toString("yyyy-MM-dd")
             for linha, retorno in enumerate(retornos[:6]):
                 self.table_retornos.insertRow(linha)
-                self.table_retornos.setRowHeight(linha, 42)
+                self.table_retornos.setRowHeight(linha, 46)
                 self.table_retornos.setItem(linha, 0, QTableWidgetItem(str(retorno.get("paciente_nome", "Paciente")).upper()))
                 data_prevista = str(retorno.get("data_prevista") or "")
                 data_formatada = QDate.fromString(data_prevista, "yyyy-MM-dd")
@@ -393,14 +370,14 @@ class HomeScreen(QWidget):
                     item_data.setForeground(QColor("#dc2626"))
                 self.table_retornos.setItem(linha, 1, item_data)
                 btn_agendar = QPushButton("Agendar")
-                btn_agendar.setFixedSize(88, 30)
-                btn_agendar.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-                btn_agendar.setStyleSheet("QPushButton { color: #0369a1; background: #eff6ff; border: 1px solid #60a5fa; border-radius: 5px; padding: 4px 8px; font-weight: 600; font-size: 11px; } QPushButton:hover { background: #dbeafe; border-color: #0284c7; }")
+                btn_agendar.setFixedHeight(32)
+                btn_agendar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+                definir_variante(btn_agendar, "secondary")
                 btn_agendar.clicked.connect(lambda checked=False, r=retorno: self.agendar_retorno(r))
-                # Mantém o botão compacto e centralizado sem deixá-lo ser comprimido.
+                # Deixa o botão centralizado e com área de clique confortável dentro da célula.
                 acao = QWidget()
                 layout_acao = QHBoxLayout(acao)
-                layout_acao.setContentsMargins(0, 0, 0, 0)
+                layout_acao.setContentsMargins(6, 5, 6, 5)
                 layout_acao.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 layout_acao.addWidget(btn_agendar)
                 self.table_retornos.setCellWidget(linha, 2, acao)
@@ -558,8 +535,8 @@ class HomeScreen(QWidget):
 class CardMetrica(QFrame):
     def __init__(self, titulo, valor, icone, bg_cor, texto_cor):
         super().__init__()
+        self.setObjectName("MetricCard")
         self.setFixedSize(250, 96)
-        self.setStyleSheet("QFrame { background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; }")
         
         layout = QHBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
@@ -602,24 +579,28 @@ class CardPasta(QFrame):
         layout.setSpacing(4)
         
         top_btn_layout = QHBoxLayout()
-        top_btn_layout.setSpacing(2)
+        top_btn_layout.setContentsMargins(0, 0, 0, 0)
+        top_btn_layout.setSpacing(6)
         
         btn_cor = QPushButton("📁")
         btn_cor.setFixedSize(24, 24)
+        btn_cor.setProperty("compact", "true")
         btn_cor.setToolTip("Clique para mudar a cor desta pasta")
-        btn_cor.setStyleSheet(f"font-size: 15px; border: none; border-radius: 4px; background-color: {cor}22;")
+        btn_cor.setStyleSheet(f"font-size: 15px; border: none; border-radius: 4px; padding: 0; min-height: 0; background-color: {cor}22;")
         btn_cor.clicked.connect(lambda: on_mudar_cor(self.nome_pasta) if on_mudar_cor else None)
         top_btn_layout.addWidget(btn_cor)
         top_btn_layout.addStretch()
         
         btn_edit = QPushButton("✏️")
         btn_edit.setFixedSize(18, 18)
-        btn_edit.setStyleSheet("font-size: 10px; background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 3px; color: #0f172a;")
+        btn_edit.setProperty("compact", "true")
+        btn_edit.setStyleSheet("font-size: 10px; background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 3px; color: #0f172a; padding: 0; min-height: 0;")
         btn_edit.clicked.connect(lambda: on_editar(self.nome_pasta) if on_editar else None)
         
         btn_del = QPushButton("🗑️")
         btn_del.setFixedSize(18, 18)
-        btn_del.setStyleSheet("font-size: 10px; background-color: #fee2e2; border: 1px solid #fca5a5; border-radius: 3px; color: #0f172a;")
+        btn_del.setProperty("compact", "true")
+        btn_del.setStyleSheet("font-size: 10px; background-color: #fee2e2; border: 1px solid #fca5a5; border-radius: 3px; color: #0f172a; padding: 0; min-height: 0;")
         btn_del.clicked.connect(lambda: on_excluir(self.nome_pasta) if on_excluir else None)
         
         top_btn_layout.addWidget(btn_edit)

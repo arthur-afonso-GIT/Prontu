@@ -139,41 +139,6 @@ class Database:
             and self.consultorio_id is not None
         )
 
-    def obter_plano_atual(self) -> str:
-        """Retorna o plano da ativação atual. Por enquanto, todos usam Solo."""
-        if not self.session_manager:
-            return "solo"
-        return self.session_manager.plano
-
-    def possui_recurso(self, recurso: str) -> bool:
-        """Ponto único para liberar recursos futuros sem espalhar regras pela interface."""
-        plano = self.obter_plano_atual()
-        recursos = self.session_manager.recursos_extras if self.session_manager else []
-        if recurso in recursos:
-            return True
-        recursos_por_plano = {
-            "solo": set(),
-            "equipe": {"equipe", "controle_acesso", "base_compartilhada"},
-            "personalizado": {"equipe", "controle_acesso", "base_compartilhada", "personalizacoes"},
-        }
-        return recurso in recursos_por_plano.get(plano, set())
-
-    def obter_resumo_assinatura(self) -> dict:
-        """Dados seguros para exibição em Configurações; nunca expõe a chave."""
-        sessao = getattr(self.session_manager, "_session", None) or {}
-        return {
-            "plano": self.obter_plano_atual(),
-            "status": sessao.get("status_assinatura") or "ativa",
-            "expira_em": sessao.get("expira_em"),
-            "max_usuarios": sessao.get("max_usuarios") or 1,
-        }
-
-    def obter_papel_atual(self) -> str:
-        """Papel da pessoa autenticada; por compatibilidade sessões antigas são Proprietário."""
-        if not self.session_manager:
-            return "proprietario"
-        return self.session_manager.papel
-
     def validar_chave_acesso(self, chave_inserida: str) -> dict | None:
         """Ativa consultório via Edge Function segura (não consulta chaves_acesso diretamente)."""
         if not self.session_manager:
@@ -196,99 +161,7 @@ class Database:
         return {
             "consultorio_id": self.consultorio_id,
             "nome_clinica": resultado.get("nome_clinica"),
-            "plano": resultado.get("plano") or "solo",
         }
-
-    def entrar_com_email(self, email: str, senha: str, lembrar: bool = True) -> dict | None:
-        if not self.session_manager:
-            return None
-        try:
-            resultado = self.session_manager.login_with_email(email, senha, lembrar=lembrar)
-        except (ConnectionError, RuntimeError) as exc:
-            print(f"Aviso: login não concluído ({exc}).")
-            return None
-        self.consultorio_id = self.session_manager.consultorio_id
-        self._aplicar_sessao_no_cliente()
-        return resultado
-
-    def aceitar_convite_equipe(self, codigo: str, email: str, senha: str) -> dict | None:
-        if not self.session_manager:
-            return None
-        try:
-            resultado = self.session_manager.accept_invite(codigo, email, senha)
-        except (ConnectionError, RuntimeError) as exc:
-            print(f"Aviso: convite não aceito ({exc}).")
-            return None
-        self.consultorio_id = self.session_manager.consultorio_id
-        self._aplicar_sessao_no_cliente()
-        return resultado
-
-    def criar_login_proprietario(self, email: str, senha: str) -> dict | None:
-        if not self.session_manager:
-            return None
-        try:
-            resultado = self.session_manager.create_owner_login(email, senha)
-        except (ConnectionError, RuntimeError) as exc:
-            print(f"Aviso: login do proprietario nao criado ({exc}).")
-            return None
-        self.consultorio_id = self.session_manager.consultorio_id
-        self._aplicar_sessao_no_cliente()
-        return resultado
-
-    def solicitar_redefinicao_senha(self, email: str) -> bool:
-        if not self.session_manager:
-            return False
-        return self.session_manager.request_password_reset(email)
-
-    def listar_equipe(self) -> dict | None:
-        if not self.session_manager:
-            return None
-        try:
-            return self.session_manager.gerenciar_equipe("listar")
-        except (ConnectionError, RuntimeError) as exc:
-            print(f"Aviso: equipe indisponivel ({exc}).")
-            return None
-
-    def criar_convite_equipe(self, nome: str, email: str, papel: str) -> dict | None:
-        if not self.session_manager:
-            return None
-        try:
-            return self.session_manager.gerenciar_equipe(
-                "convidar", nome=nome, email=email, papel=papel
-            )
-        except (ConnectionError, RuntimeError) as exc:
-            print(f"Aviso: convite nao criado ({exc}).")
-            return None
-
-    def revogar_acesso_equipe(self, tipo: str, identificador: str) -> bool:
-        if not self.session_manager:
-            return False
-        try:
-            campo = "convite_id" if tipo == "convite" else "membro_id"
-            self.session_manager.gerenciar_equipe("revogar", **{campo: identificador})
-            return True
-        except (ConnectionError, RuntimeError) as exc:
-            print(f"Aviso: acesso nao revogado ({exc}).")
-            return False
-
-    def alterar_papel_equipe(self, membro_id: str, papel: str) -> bool:
-        if not self.session_manager:
-            return False
-        try:
-            self.session_manager.gerenciar_equipe("alterar_papel", membro_id=membro_id, papel=papel)
-            return True
-        except (ConnectionError, RuntimeError) as exc:
-            print(f"Aviso: papel nao alterado ({exc}).")
-            return False
-
-    def renovar_convite_equipe(self, convite_id: str) -> dict | None:
-        if not self.session_manager:
-            return None
-        try:
-            return self.session_manager.gerenciar_equipe("renovar_convite", convite_id=convite_id)
-        except (ConnectionError, RuntimeError) as exc:
-            print(f"Aviso: convite nao renovado ({exc}).")
-            return None
 
     def renovar_sessao_se_necessario(self) -> bool:
         if not self.session_manager:
@@ -353,167 +226,6 @@ class Database:
             ).execute()
         except Exception as exc:
             print(f"Aviso: falha ao registrar auditoria ({acao}/{entidade}): {exc}")
-
-    def listar_eventos_auditoria(self, limite: int = 300) -> list[dict]:
-        """Retorna metadados de auditoria do consultório, sem valores clínicos."""
-        if not self.supabase or self.consultorio_id is None:
-            return []
-        try:
-            resposta = (
-                self.supabase.table("audit_logs")
-                .select(
-                    "id, acao, entidade, registro_id, contexto, "
-                    "valor_anterior, valor_novo, criado_em"
-                )
-                .eq("consultorio_id", self.consultorio_id)
-                .order("criado_em", desc=True)
-                .limit(limite)
-                .execute()
-            )
-            return resposta.data or []
-        except Exception as exc:
-            print(f"Aviso: falha ao listar auditoria ({type(exc).__name__}).")
-            return []
-
-    def criar_retorno(self, paciente_id: int, data_prevista: str | None = None, motivo: str = "") -> bool:
-        if not self.supabase or self.consultorio_id is None:
-            return False
-        try:
-            self.supabase.table("retornos_pacientes").insert({
-                "consultorio_id": self.consultorio_id,
-                "paciente_id": paciente_id,
-                "data_prevista": data_prevista,
-                "motivo": motivo.strip(),
-                "status": "Pendente",
-            }).execute()
-            self.registrar_evento_auditoria(
-                "INSERT", "retornos_pacientes", paciente_id,
-                {"data_prevista": data_prevista},
-            )
-            return True
-        except Exception as exc:
-            print(f"Aviso: falha ao criar retorno ({type(exc).__name__}).")
-            return False
-
-    def criar_retorno_pendente_da_consulta(self, paciente_nome: str) -> bool:
-        """Cria um único retorno pendente após uma consulta comum ser realizada."""
-        if not self.supabase or self.consultorio_id is None or not paciente_nome.strip():
-            return False
-        try:
-            paciente_resp = (
-                self.supabase.table("pacientes")
-                .select("id")
-                .eq("consultorio_id", self.consultorio_id)
-                .ilike("nome", paciente_nome.strip())
-                .is_("deleted_at", "null")
-                .limit(1)
-                .execute()
-            )
-            if not paciente_resp.data:
-                return False
-            paciente_id = paciente_resp.data[0]["id"]
-            existente = (
-                self.supabase.table("retornos_pacientes")
-                .select("id")
-                .eq("consultorio_id", self.consultorio_id)
-                .eq("paciente_id", paciente_id)
-                .in_("status", ["Pendente", "Agendado"])
-                .limit(1)
-                .execute()
-            )
-            if existente.data:
-                return True
-            return self.criar_retorno(
-                paciente_id,
-                None,
-                "",
-            )
-        except Exception as exc:
-            print(f"Aviso: falha ao criar retorno automático ({type(exc).__name__}).")
-            return False
-
-    def definir_data_retorno(self, retorno_id: int, data_prevista: str) -> bool:
-        if not self.supabase or self.consultorio_id is None or not retorno_id or not data_prevista:
-            return False
-        try:
-            self.supabase.table("retornos_pacientes").update({
-                "data_prevista": data_prevista,
-                "status": "Pendente",
-            }).eq("id", retorno_id).eq("consultorio_id", self.consultorio_id).execute()
-            self.registrar_evento_auditoria(
-                "UPDATE", "retornos_pacientes", retorno_id,
-                {"data_prevista": data_prevista},
-            )
-            return True
-        except Exception as exc:
-            print(f"Aviso: falha ao definir data do retorno ({type(exc).__name__}).")
-            return False
-
-    def listar_retornos_pendentes(self, limite: int = 100) -> list[dict]:
-        if not self.supabase or self.consultorio_id is None:
-            return []
-        try:
-            resposta = (
-                self.supabase.table("retornos_pacientes")
-                .select("id, paciente_id, data_prevista, motivo, status")
-                .eq("consultorio_id", self.consultorio_id)
-                .eq("status", "Pendente")
-                .order("data_prevista")
-                .limit(limite)
-                .execute()
-            )
-            retornos = resposta.data or []
-            ids = list({item.get("paciente_id") for item in retornos if item.get("paciente_id") is not None})
-            if not ids:
-                return retornos
-            pacientes = (
-                self.supabase.table("pacientes")
-                .select("id, nome")
-                .eq("consultorio_id", self.consultorio_id)
-                .in_("id", ids)
-                .is_("deleted_at", "null")
-                .execute()
-            )
-            nomes = {item["id"]: item.get("nome", "Paciente") for item in (pacientes.data or [])}
-            for retorno in retornos:
-                retorno["paciente_nome"] = nomes.get(retorno.get("paciente_id"), "Paciente indisponível")
-            return retornos
-        except Exception as exc:
-            print(f"Aviso: falha ao listar retornos ({type(exc).__name__}).")
-            return []
-
-    def listar_retornos_paciente(self, paciente_id: int) -> list[dict]:
-        """Retorna o histórico de retornos de um paciente do consultório atual."""
-        if not self.supabase or self.consultorio_id is None or not paciente_id:
-            return []
-        try:
-            resposta = (
-                self.supabase.table("retornos_pacientes")
-                .select("id, data_prevista, motivo, status, criado_em")
-                .eq("consultorio_id", self.consultorio_id)
-                .eq("paciente_id", paciente_id)
-                .order("data_prevista", desc=True)
-                .execute()
-            )
-            return resposta.data or []
-        except Exception as exc:
-            print(f"Aviso: falha ao listar retornos do paciente ({type(exc).__name__}).")
-            return []
-
-    def atualizar_status_retorno(self, retorno_id: int, status: str) -> bool:
-        if not self.supabase or self.consultorio_id is None:
-            return False
-        if status not in {"Pendente", "Agendado", "Concluído", "Não retornou", "Cancelado"}:
-            return False
-        try:
-            self.supabase.table("retornos_pacientes").update({"status": status}).eq(
-                "id", retorno_id
-            ).eq("consultorio_id", self.consultorio_id).execute()
-            self.registrar_evento_auditoria("UPDATE", "retornos_pacientes", retorno_id, {"status": status})
-            return True
-        except Exception as exc:
-            print(f"Aviso: falha ao atualizar retorno ({type(exc).__name__}).")
-            return False
 
     # --- FUNÇÕES DE CONFIGURAÇÃO ---
     def obter_nome_profissional(self):
@@ -651,9 +363,6 @@ class Database:
         if not self.supabase or self.consultorio_id is None:
             return []
         try:
-            if self.obter_papel_atual() == "secretaria":
-                resposta = self.supabase.rpc("listar_pacientes_secretaria", {"p_busca": None}).execute()
-                return [str(row.get("nome") or "") for row in (resposta.data or [])]
             resposta = (
                 self.supabase.table("pacientes")
                 .select("nome")
@@ -667,60 +376,9 @@ class Database:
             print(f"Erro ao buscar nomes: {e}")
             return []
 
-    def listar_pacientes_secretaria(self, busca: str | None = None) -> list[dict]:
-        if not self.supabase or self.consultorio_id is None:
-            return []
-        try:
-            resposta = self.supabase.rpc("listar_pacientes_secretaria", {"p_busca": busca}).execute()
-            return resposta.data or []
-        except Exception as exc:
-            print(f"Erro ao listar pacientes básicos: {type(exc).__name__}.")
-            return []
-
-    def obter_paciente_secretaria(self, paciente_id: int) -> dict | None:
-        if not self.supabase:
-            return None
-        try:
-            resposta = self.supabase.rpc("obter_paciente_secretaria", {"p_paciente_id": int(paciente_id)}).execute()
-            return (resposta.data or [None])[0]
-        except Exception as exc:
-            print(f"Erro ao obter paciente básico: {type(exc).__name__}.")
-            return None
-
-    def salvar_paciente_secretaria(self, paciente_id: int | None, dados: dict) -> int | None:
-        if not self.supabase:
-            return None
-        try:
-            resposta = self.supabase.rpc("salvar_paciente_secretaria", {
-                "p_paciente_id": paciente_id,
-                "p_nome": dados.get("nome"), "p_telefone": dados.get("telefone"),
-                "p_nascimento": dados.get("nascimento"), "p_convenio": dados.get("convenio"),
-                "p_pasta": dados.get("pasta"), "p_sexo": dados.get("sexo"),
-            }).execute()
-            return int(resposta.data) if resposta.data is not None else None
-        except Exception as exc:
-            print(f"Erro ao salvar paciente básico: {type(exc).__name__}.")
-            return None
-
     def soft_delete_paciente(self, paciente_id: int) -> bool:
         """Exclusão lógica — preserva dados clínicos."""
         if not self.supabase or self.consultorio_id is None:
-            return False
-        try:
-            from datetime import datetime, timezone
-
-            agora = datetime.now(timezone.utc).isoformat()
-            self.supabase.table("pacientes").update(
-                {"deleted_at": agora}
-            ).eq("id", paciente_id).eq("consultorio_id", self.consultorio_id).execute()
-            self.supabase.table("fichas_preenchidas").update(
-                {"deleted_at": agora}
-            ).eq("paciente_id", paciente_id).eq(
-                "consultorio_id", self.consultorio_id
-            ).execute()
-            return True
-        except Exception as e:
-            print(f"Erro ao excluir paciente (soft delete): {e}")
             return False
 
     def soft_delete_ficha(self, ficha_id: int) -> bool:
@@ -737,16 +395,19 @@ class Database:
         except Exception as e:
             print(f"Erro ao excluir ficha: {e}")
             return False
-
-    def atualizar_respostas_ficha(self, ficha_id: int, dados_respostas: dict) -> bool:
-        """Atualiza apenas as respostas de uma ficha do consultório ativo."""
-        if not self.supabase or self.consultorio_id is None:
-            return False
         try:
+            from datetime import datetime, timezone
+
+            agora = datetime.now(timezone.utc).isoformat()
+            self.supabase.table("pacientes").update(
+                {"deleted_at": agora}
+            ).eq("id", paciente_id).eq("consultorio_id", self.consultorio_id).execute()
             self.supabase.table("fichas_preenchidas").update(
-                {"dados_respostas": dados_respostas}
-            ).eq("id", ficha_id).eq("consultorio_id", self.consultorio_id).execute()
+                {"deleted_at": agora}
+            ).eq("paciente_id", paciente_id).eq(
+                "consultorio_id", self.consultorio_id
+            ).execute()
             return True
         except Exception as e:
-            print(f"Erro ao atualizar ficha: {e}")
+            print(f"Erro ao excluir paciente (soft delete): {e}")
             return False

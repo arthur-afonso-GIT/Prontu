@@ -1,18 +1,13 @@
 import os
 import sys
-import time
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
-                               QPushButton, QStackedWidget, QLabel, QFrame, QMessageBox)
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QIcon, QPixmap
+                               QPushButton, QStackedWidget, QLabel, QFrame)
+from PySide6.QtCore import Qt
 
 from ui.screens.home import HomeScreen
-from ui.screens.pacientes import PacientesScreen, normalizar_nome_pasta
-from ui.screens.pacientes_secretaria import SecretariaPacientesScreen
+from ui.screens.pacientes import PacientesScreen
 from ui.screens.agenda import AgendaScreen 
-from ui.screens.financeiro import FinanceiroScreen
 from ui.screens.configuracoes import ConfiguracoesScreen
-from ui.screens.equipe import EquipeScreen
 
 try:
     from ui.screens.fichas import FichasScreen
@@ -23,18 +18,11 @@ except ImportError:
 class MainWindow(QMainWindow):
     def __init__(self, database_instancia):
         super().__init__()
-        caminho_logo = os.path.join(os.path.dirname(__file__), "assets", "prontu_logo.png")
-        if os.path.exists(caminho_logo):
-            self.setWindowIcon(QIcon(caminho_logo))
         self.setWindowTitle("Prontu — Gerenciamento Inteligente")
         self.resize(1200, 750)
         
         # Recebe a conexão única do Supabase ativada no main.py
         self.db = database_instancia
-        self._ultima_atualizacao_tela = {}
-        # Evita repetir consultas remotas ao alternar rapidamente entre telas.
-        # Operações de salvar continuam atualizando a própria tela na hora.
-        self._intervalo_atualizacao_tela = 8.0
 
         self.init_db_estruturas()
         self.pastas_sistema = self.carregar_pastas_sqlite()
@@ -83,22 +71,9 @@ class MainWindow(QMainWindow):
         sidebar_layout.setSpacing(8)
         
         # Logo / Título do App
-        logo_layout = QHBoxLayout()
-        logo_layout.setContentsMargins(4, 0, 0, 24)
-        logo_layout.setSpacing(10)
-        logo_icone = QLabel()
-        logo_icone.setFixedSize(48, 48)
-        if os.path.exists(caminho_logo):
-            logo_icone.setPixmap(QPixmap(caminho_logo).scaled(
-                48, 48, Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            ))
-        logo_layout.addWidget(logo_icone)
-        logo_label = QLabel("Prontu")
-        logo_label.setStyleSheet("color: #ffffff; font-size: 22px; font-weight: bold;")
-        logo_layout.addWidget(logo_label)
-        logo_layout.addStretch()
-        sidebar_layout.addLayout(logo_layout)
+        logo_label = QLabel("🏥 Prontu")
+        logo_label.setStyleSheet("color: #ffffff; font-size: 22px; font-weight: bold; margin-bottom: 24px; padding-left: 8px;")
+        sidebar_layout.addWidget(logo_label)
         
         # Botões de Navegação
         self.btn_home = QPushButton(" 🏠 Painel Principal")
@@ -107,9 +82,7 @@ class MainWindow(QMainWindow):
         self.btn_fichas = QPushButton(" 📝 Fichas Clínicas")
         self.btn_config = QPushButton(" ⚙️ Configurações")
         
-        self.btn_financeiro = QPushButton(" 💰 Financeiro")
-        self.btn_equipe = QPushButton(" 👥 Equipe")
-        self.botoes_menu = [self.btn_home, self.btn_pacientes, self.btn_agenda, self.btn_fichas, self.btn_financeiro, self.btn_equipe, self.btn_config]
+        self.botoes_menu = [self.btn_home, self.btn_pacientes, self.btn_agenda, self.btn_fichas, self.btn_config]
         
         for btn in self.botoes_menu:
             sidebar_layout.addWidget(btn)
@@ -117,9 +90,10 @@ class MainWindow(QMainWindow):
         sidebar_layout.addStretch()
         
         # Rodapé da Sidebar
-        self.lbl_status_sessao = QLabel()
-        self.lbl_status_sessao.setStyleSheet("font-size: 11px; padding-left: 8px;")
-        sidebar_layout.addWidget(self.lbl_status_sessao)
+        nome_clinica = "Conectado à Nuvem"
+        footer_label = QLabel(nome_clinica)
+        footer_label.setStyleSheet("color: #64748b; font-size: 11px; padding-left: 8px;")
+        sidebar_layout.addWidget(footer_label)
         
         main_layout.addWidget(sidebar)
         
@@ -132,23 +106,11 @@ class MainWindow(QMainWindow):
         self.screen_home = HomeScreen(
             self,
             on_novo_paciente_click=self.navegar_para_novo_paciente,
-            on_pasta_click=self.filtrar_pacientes_por_pasta,
-            on_agendar_retorno_click=self.agendar_retorno_do_painel,
-            on_consulta_click=self.abrir_consulta_da_home,
+            on_pasta_click=self.filtrar_pacientes_por_pasta
         )
-        self.screen_pacientes = (
-            SecretariaPacientesScreen(self.db)
-            if self.db.obter_papel_atual() == "secretaria"
-            else PacientesScreen(self.db)
-        )
+        self.screen_pacientes = PacientesScreen(self.db)
         self.screen_agenda = AgendaScreen(self.db)
-        self.screen_fichas = FichasScreen(self.db) if FichasScreen is not None else QWidget()
-        self.screen_financeiro = FinanceiroScreen(self.db)
-        self.screen_equipe = EquipeScreen(self.db)
-        self.screen_pacientes.window_principal = self
-        self.screen_agenda.window_principal = self
-        if hasattr(self.screen_fichas, "__dict__"):
-            self.screen_fichas.window_principal = self
+        self.screen_fichas = FichasScreen() if FichasScreen is not None else QWidget()
         # ConfiguracoesScreen também precisa da JANELA PRINCIPAL (self), não do banco,
         # para conseguir chamar self.screen_home.atualizar_saudacao_dinamica() ao salvar.
         self.screen_config = ConfiguracoesScreen(window_principal=self)
@@ -161,9 +123,6 @@ class MainWindow(QMainWindow):
         
         # Sincroniza a lista de pastas já carregada com o combobox de Pacientes
         # assim que a tela é criada, sem precisar esperar o usuário trocar de aba.
-        self.painel_telas.addWidget(self.screen_financeiro)
-        self.painel_telas.addWidget(self.screen_equipe)
-
         if hasattr(self.screen_pacientes, 'atualizar_combobox_pastas'):
             self.screen_pacientes.atualizar_combobox_pastas(self.pastas_sistema)
         self.screen_pacientes.pastas_cores = self.pastas_cores
@@ -176,49 +135,14 @@ class MainWindow(QMainWindow):
         self.btn_agenda.clicked.connect(lambda: self.mudar_tela(2, self.btn_agenda))
         self.btn_fichas.clicked.connect(lambda: self.mudar_tela(3, self.btn_fichas))
         self.btn_config.clicked.connect(lambda: self.mudar_tela(4, self.btn_config))
-        self.btn_financeiro.clicked.connect(lambda: self.mudar_tela(5, self.btn_financeiro))
-        self.btn_equipe.clicked.connect(lambda: self.mudar_tela(6, self.btn_equipe))
         
         # Define a tela padrão inicial (Home)
-        self.atualizar_permissoes_menu()
-        if self.db.obter_papel_atual() == "secretaria":
-            self.mudar_tela(2, self.btn_agenda)
-        else:
-            self.mudar_tela(0, self.btn_home)
-        self.atualizar_status_sessao()
+        self.mudar_tela(0, self.btn_home)
 
-    def atualizar_permissoes_menu(self):
-        """Oculta atalhos incompatíveis; o Supabase continua validando o acesso."""
-        papel = self.db.obter_papel_atual()
-        self.btn_equipe.setVisible(self.db.possui_recurso("equipe") and papel == "proprietario")
-        self.btn_home.setVisible(papel != "secretaria")
-        self.btn_fichas.setVisible(papel != "secretaria")
-        self.btn_financeiro.setVisible(papel != "secretaria")
-        self.btn_config.setVisible(papel != "secretaria")
-
-    def atualizar_status_sessao(self):
-        """Exibe somente um estado que o aplicativo consegue afirmar com segurança."""
-        sessao_ativa = bool(getattr(self.db, "esta_autenticado", lambda: False)())
-        if sessao_ativa:
-            self.lbl_status_sessao.setText("Sessão segura ativa")
-            self.lbl_status_sessao.setStyleSheet("color: #86efac; font-size: 11px; padding-left: 8px;")
-        else:
-            self.lbl_status_sessao.setText("Sessão precisa ser revalidada")
-            self.lbl_status_sessao.setStyleSheet("color: #fbbf24; font-size: 11px; padding-left: 8px;")
-
-    def mudar_tela(self, indice, botao_ativo, atualizar=True):
+    def mudar_tela(self, indice, botao_ativo):
         """Muda o painel visível, atualiza o estado visual do botão selecionado
         e dispara o refresh de dados da tela que acabou de ficar visível —
         garantindo que cada aba sempre mostre dados atuais do banco."""
-        tela_anterior = self.painel_telas.currentWidget()
-        if indice != self.painel_telas.currentIndex() and not self.confirmar_descarte_de_alteracoes():
-            return
-
-        if tela_anterior is self.screen_agenda and indice != 2:
-            cancelar_retorno = getattr(self.screen_agenda, "cancelar_retorno_em_agendamento", None)
-            if cancelar_retorno:
-                cancelar_retorno()
-
         self.painel_telas.setCurrentIndex(indice)
         
         for btn in self.botoes_menu:
@@ -231,57 +155,6 @@ class MainWindow(QMainWindow):
         botao_ativo.style().polish(botao_ativo)
 
         # --- Gatilhos de atualização por tela ---
-        if not atualizar:
-            return
-
-        agora = time.monotonic()
-        ultima = self._ultima_atualizacao_tela.get(indice, 0)
-        if agora - ultima < self._intervalo_atualizacao_tela:
-            return
-        self._ultima_atualizacao_tela[indice] = agora
-        QTimer.singleShot(40, lambda: self._atualizar_tela_visivel(indice))
-
-    def confirmar_descarte_de_alteracoes(self, proxima_acao="trocar de tela"):
-        """Evita perder dados digitados antes de trocar de tela ou fechar o app."""
-        tela_atual = self.painel_telas.currentWidget()
-        possui_alteracoes = getattr(tela_atual, "tem_alteracoes_nao_salvas", lambda: False)
-        if not possui_alteracoes():
-            return True
-
-        dialogo = QMessageBox(self)
-        dialogo.setWindowTitle("Alterações não salvas")
-        dialogo.setText("Existem alterações que ainda não foram salvas.")
-        dialogo.setInformativeText(f"Deseja descartar essas alterações e {proxima_acao}?")
-        dialogo.setIcon(QMessageBox.Icon.Warning)
-        dialogo.setStandardButtons(
-            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel
-        )
-        dialogo.setDefaultButton(QMessageBox.StandardButton.Cancel)
-        dialogo.setStyleSheet(
-            "QMessageBox { background: #ffffff; } QLabel { color: #0f172a; font-size: 13px; } "
-            "QPushButton { background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; "
-            "border-radius: 5px; padding: 6px 14px; font-weight: bold; }"
-        )
-        if dialogo.exec() != QMessageBox.StandardButton.Discard:
-            return False
-
-        descartar = getattr(tela_atual, "descartar_alteracoes_nao_salvas", None)
-        if descartar:
-            descartar()
-        return True
-
-    def closeEvent(self, event):
-        """Impede que o fechamento da janela descarte formulários em andamento."""
-        if self.confirmar_descarte_de_alteracoes("fechar o aplicativo"):
-            event.accept()
-        else:
-            event.ignore()
-
-    def _atualizar_tela_visivel(self, indice):
-        """Atualiza dados depois que a tela escolhida já foi desenhada."""
-        if self.painel_telas.currentIndex() != indice:
-            return
-
         if indice == 0:
             if hasattr(self.screen_home, 'renderizar_lista_pastas'):
                 self.screen_home.renderizar_lista_pastas()
@@ -303,75 +176,12 @@ class MainWindow(QMainWindow):
         elif indice == 4:
             if hasattr(self.screen_config, 'carregar_dados_configurados'):
                 self.screen_config.carregar_dados_configurados()
-        elif indice == 5:
-            if hasattr(self.screen_financeiro, 'carregar_dados'):
-                self.screen_financeiro.carregar_dados()
-        elif indice == 6:
-            if hasattr(self.screen_equipe, 'carregar_dados'):
-                self.screen_equipe.carregar_dados()
-
-    def atualizar_dados_home(self):
-        """Atualiza o painel imediatamente após uma alteração feita no app."""
-        self._ultima_atualizacao_tela[0] = time.monotonic()
-        if hasattr(self.screen_home, "renderizar_lista_pastas"):
-            self.screen_home.renderizar_lista_pastas(force=True)
 
     def navegar_para_novo_paciente(self):
         """Callback do botão 'Novo Paciente' da Home: limpa o formulário e vai para a aba de Pacientes."""
         if hasattr(self.screen_pacientes, 'limpar_formulario'):
             self.screen_pacientes.limpar_formulario()
         self.mudar_tela(1, self.btn_pacientes)
-
-    def editar_ficha_preenchida(self, ficha_id):
-        """Navega para a ficha e a abre após a atualização visual da tela."""
-        self.mudar_tela(3, self.btn_fichas, atualizar=False)
-        QTimer.singleShot(
-            0,
-            lambda: self.screen_fichas.abrir_ficha_para_edicao(ficha_id)
-            if hasattr(self.screen_fichas, "abrir_ficha_para_edicao") else None,
-        )
-
-    def abrir_nova_ficha_para_paciente(self, paciente_id):
-        """Abre uma nova ficha já vinculada ao paciente atendido na agenda."""
-        self.mudar_tela(3, self.btn_fichas, atualizar=False)
-        QTimer.singleShot(
-            0,
-            lambda: self.screen_fichas.iniciar_nova_ficha_para_paciente(paciente_id)
-            if hasattr(self.screen_fichas, "iniciar_nova_ficha_para_paciente") else None,
-        )
-
-    def agendar_retorno_do_painel(self, retorno):
-        """Abre a Agenda já preenchida a partir de um retorno pendente."""
-        self.mudar_tela(2, self.btn_agenda, atualizar=False)
-        if self.painel_telas.currentIndex() != 2:
-            return
-        QTimer.singleShot(
-            0,
-            lambda: self.screen_agenda.preencher_agendamento_retorno(retorno)
-            if hasattr(self.screen_agenda, "preencher_agendamento_retorno") else None,
-        )
-
-    def abrir_consulta_da_home(self, consulta):
-        """Abre a Agenda já posicionada no dia e horário clicados no Painel."""
-        self.mudar_tela(2, self.btn_agenda, atualizar=False)
-        if self.painel_telas.currentIndex() != 2:
-            return
-        QTimer.singleShot(
-            0,
-            lambda: self.screen_agenda.abrir_consulta_por_data_hora(consulta)
-            if hasattr(self.screen_agenda, "abrir_consulta_por_data_hora") else None,
-        )
-
-    def abrir_retorno_na_agenda(self, retorno):
-        """Abre a Agenda na data já definida para um retorno."""
-        self.mudar_tela(2, self.btn_agenda, atualizar=False)
-        if self.painel_telas.currentIndex() != 2:
-            return
-        QTimer.singleShot(
-            0,
-            lambda: self.screen_agenda.abrir_data_do_retorno(retorno.get("data_prevista"))
-            if hasattr(self.screen_agenda, "abrir_data_do_retorno") else None,
-        )
 
     def abrir_paciente_especifico(self, paciente_id):
         """Vai para a aba Pacientes e já abre o prontuário de um paciente específico
@@ -411,14 +221,10 @@ class MainWindow(QMainWindow):
                 .order("nome")\
                 .execute()
             
-            pastas_atuais = []
-            for row in resposta.data:
-                nome = normalizar_nome_pasta(row.get("nome"))
-                if nome and nome.casefold() not in {p.casefold() for p in pastas_atuais}:
-                    pastas_atuais.append(nome)
+            pastas_atuais = [row["nome"].strip() for row in resposta.data if (row.get("nome") or "").strip()]
             self.pastas_cores = {
-                normalizar_nome_pasta(row.get("nome")): (row.get("cor") or "#0284c7")
-                for row in resposta.data if normalizar_nome_pasta(row.get("nome"))
+                row["nome"].strip(): (row.get("cor") or "#0284c7")
+                for row in resposta.data if (row.get("nome") or "").strip()
             }
             if pastas_atuais:
                 return pastas_atuais
@@ -434,11 +240,7 @@ class MainWindow(QMainWindow):
         if not self.db.supabase or self.db.consultorio_id is None:
             return
         try:
-            self.pastas_sistema = sorted({
-                normalizar_nome_pasta(p)
-                for p in nova_lista
-                if normalizar_nome_pasta(p)
-            })
+            self.pastas_sistema = sorted(set(p.strip() for p in nova_lista if (p or "").strip()))
             if not self.pastas_sistema:
                 self.pastas_sistema = ["Geral"]
             

@@ -5,11 +5,11 @@ from PySide6.QtWidgets import QAbstractButton, QAbstractSpinBox, QComboBox, QTab
 
 HOVER_STYLE = """
 /* Controles acionáveis */
-QPushButton:enabled:hover, QToolButton:enabled:hover {
+QToolButton:enabled:hover {
     background-color: #e0f2fe;
     border-color: #38bdf8;
 }
-QPushButton:enabled:pressed, QToolButton:enabled:pressed {
+QToolButton:enabled:pressed {
     background-color: #bae6fd;
 }
 QComboBox:hover, QAbstractSpinBox:hover {

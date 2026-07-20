@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QLineEdit, QComboBox, QPushButton,
     QMessageBox,
 )
+from ui.design_system import definir_variante
 from utils.operacao_segura import (
     finalizar_operacao,
     iniciar_operacao,
@@ -20,13 +21,14 @@ class FinanceiroScreen(QWidget):
 
     def __init__(self, database_instancia):
         super().__init__()
+        self.setObjectName("FinanceiroScreen")
         self.db = database_instancia
         self.registros = []
         self.registro_selecionado = None
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(26, 24, 26, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
 
         titulo = QLabel("Financeiro")
         titulo.setStyleSheet("font-size: 24px; font-weight: bold; color: #0f172a;")
@@ -60,7 +62,6 @@ class FinanceiroScreen(QWidget):
         self.tabela.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tabela.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.tabela.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.tabela.setStyleSheet("QTableWidget { background: white; border: 1px solid #e2e8f0; border-radius: 8px; color: #334155; } QTableWidget::item { padding: 8px; } QTableWidget::item:selected { background: #e0f2fe; color: #0f172a; } QHeaderView::section { background: #f8fafc; border: none; border-bottom: 1px solid #e2e8f0; padding: 8px; color: #64748b; font-weight: bold; }")
         header = self.tabela.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -73,15 +74,8 @@ class FinanceiroScreen(QWidget):
         conteudo.addLayout(coluna_lista, stretch=3)
 
         painel = QFrame()
-        painel.setObjectName("PainelPagamento")
+        painel.setObjectName("FormCard")
         painel.setFixedWidth(320)
-        painel.setStyleSheet("""
-            QFrame#PainelPagamento { background: white; border: 1px solid #e2e8f0; border-radius: 10px; }
-            QLabel { color: #334155; font-size: 12px; font-weight: 500; border: none; background: transparent; }
-            QLineEdit, QComboBox { background: white; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px; min-height: 18px; }
-            QLineEdit:focus, QComboBox:focus { border-color: #0284c7; }
-            QComboBox QAbstractItemView { background: white; color: #0f172a; selection-background-color: #0284c7; }
-        """)
         form = QVBoxLayout(painel)
         form.setContentsMargins(18, 18, 18, 18)
         form.setSpacing(10)
@@ -113,7 +107,7 @@ class FinanceiroScreen(QWidget):
         form.addWidget(self.input_observacao)
         form.addStretch()
         self.btn_salvar = QPushButton("Salvar pagamento")
-        self.btn_salvar.setStyleSheet("QPushButton { background: #0284c7; color: white; border: none; border-radius: 6px; padding: 11px; font-weight: bold; } QPushButton:hover { background: #0369a1; }")
+        definir_variante(self.btn_salvar, "primary")
         self.btn_salvar.clicked.connect(self.salvar_pagamento)
         form.addWidget(self.btn_salvar)
         conteudo.addWidget(painel)
@@ -125,8 +119,8 @@ class FinanceiroScreen(QWidget):
 
     def _criar_card(self, titulo, valor, fundo, cor):
         card = QFrame()
+        card.setObjectName("MetricCard")
         card.setFixedSize(210, 86)
-        card.setStyleSheet("QFrame { background: white; border: 1px solid #e2e8f0; border-radius: 8px; }")
         box = QVBoxLayout(card)
         box.setContentsMargins(14, 12, 14, 12)
         lbl_titulo = QLabel(titulo)

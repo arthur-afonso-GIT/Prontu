@@ -1,4 +1,10 @@
+import os
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QCheckBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTabWidget, QVBoxLayout, QWidget
+
+from ui.design_system import definir_variante
 
 
 def campo_senha_com_visibilidade(campo: QLineEdit) -> QWidget:
@@ -12,11 +18,7 @@ def campo_senha_com_visibilidade(campo: QLineEdit) -> QWidget:
     botao = QPushButton("Mostrar")
     botao.setFixedWidth(76)
     botao.setToolTip("Mostrar senha")
-    botao.setStyleSheet(
-        "QPushButton { background: #e2e8f0; color: #0f172a; border: 1px solid #cbd5e1; "
-        "border-radius: 6px; padding: 8px 5px; font-weight: 600; } "
-        "QPushButton:hover { background: #cbd5e1; }"
-    )
+    definir_variante(botao, "secondary")
     layout.addWidget(botao)
 
     def alternar() -> None:
@@ -115,23 +117,38 @@ class LoginDialog(QDialog):
         super().__init__()
         self.db = database
         self.setWindowTitle("Acessar o Prontu")
-        self.setMinimumWidth(430)
-        self.setStyleSheet("""
-            QDialog { background: #f8fafc; }
-            QWidget { color: #0f172a; background: #f8fafc; }
-            QTabWidget::pane { background: #ffffff; border: 1px solid #dbe5f0; border-radius: 7px; }
-            QTabBar::tab { background: #e2e8f0; color: #334155; padding: 8px 12px; border: 0; border-top-left-radius: 5px; border-top-right-radius: 5px; }
-            QTabBar::tab:selected { background: #ffffff; color: #0369a1; font-weight: 700; }
-            QLabel { color: #0f172a; background: transparent; }
-            QLineEdit { background: #ffffff; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 6px; padding: 9px; }
-            QLineEdit:focus { border: 2px solid #0284c7; }
-        """)
+        self.setObjectName("LoginDialog")
+        self.setMinimumSize(500, 420)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(34, 30, 34, 30)
+        layout.setSpacing(14)
+
+        marca = QHBoxLayout()
+        logo = QLabel()
+        logo.setFixedSize(42, 42)
+        caminho_logo = os.path.join(os.path.dirname(__file__), "assets", "prontu_logo.png")
+        if os.path.exists(caminho_logo):
+            logo.setPixmap(QPixmap(caminho_logo).scaled(
+                42, 42, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ))
+        marca.addWidget(logo)
         titulo = QLabel("Prontu")
-        titulo.setStyleSheet("font-size: 25px; font-weight: 700;")
-        layout.addWidget(titulo)
-        layout.addWidget(QLabel("Acesse sua clínica com seus próprios dados."))
+        titulo.setObjectName("LoginBrand")
+        marca.addWidget(titulo)
+        marca.addStretch()
+        layout.addLayout(marca)
+
+        titulo_acesso = QLabel("Acesse sua clínica")
+        titulo_acesso.setStyleSheet("font-size: 20px; font-weight: 750; color: #17233a;")
+        layout.addWidget(titulo_acesso)
+        subtitulo = QLabel("Entre com seu e-mail, aceite um convite ou ative a clínica neste dispositivo.")
+        subtitulo.setObjectName("LoginSubtitle")
+        subtitulo.setWordWrap(True)
+        layout.addWidget(subtitulo)
+
         abas = QTabWidget()
+        abas.setObjectName("LoginCard")
         abas.addTab(self._login(), "Entrar")
         abas.addTab(self._convite(), "Usar convite")
         abas.addTab(self._ativacao(), "Ativar clínica")
@@ -140,7 +157,7 @@ class LoginDialog(QDialog):
     def _botao(self, texto, acao):
         botao = QPushButton(texto)
         botao.clicked.connect(acao)
-        botao.setStyleSheet("QPushButton { background: #0284c7; color: white; border: 0; border-radius: 6px; padding: 10px; font-weight: 700; } QPushButton:hover { background: #0369a1; }")
+        definir_variante(botao, "primary")
         return botao
 
     def _pagina(self, campos, texto, botao, acao):
@@ -166,7 +183,7 @@ class LoginDialog(QDialog):
         self.checkbox_lembrar.setToolTip("Deixe marcado apenas em um computador pessoal e protegido.")
         pagina.layout().insertWidget(1, self.checkbox_lembrar)
         recuperar = QPushButton("Esqueci minha senha")
-        recuperar.setStyleSheet("QPushButton { background: transparent; color: #0369a1; border: 0; padding: 8px; text-align: left; } QPushButton:hover { text-decoration: underline; }")
+        definir_variante(recuperar, "ghost")
         recuperar.clicked.connect(lambda: RecuperarSenhaDialog(self.db, self).exec())
         pagina.layout().insertWidget(2, recuperar)
         return pagina

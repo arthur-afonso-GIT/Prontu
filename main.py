@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox, QDialog
 from database import Database
 from ui.login_dialog import LoginDialog
+from ui.design_system import instalar_design_system
 from ui.interaction_feedback import instalar_feedback_interativo
 
 
@@ -114,6 +115,7 @@ def _carregar_modulo_main_window(caminho_arquivo):
 
 def inicializar_sistema():
     app = QApplication(sys.argv)
+    instalar_design_system(app)
     instalar_feedback_interativo(app)
     
     # Inicializa o banco de dados principal

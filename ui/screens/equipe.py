@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
+from ui.design_system import definir_variante
 
 
 class ConviteCriadoDialog(QDialog):
@@ -16,7 +17,6 @@ class ConviteCriadoDialog(QDialog):
         self.codigo = codigo
         self.setWindowTitle("Convite criado")
         self.setMinimumWidth(440)
-        self.setStyleSheet("QDialog { background: #ffffff; } QLabel { color: #0f172a; } QLineEdit { background: #f8fafc; color: #0f172a; border: 1px solid #93c5fd; border-radius: 6px; padding: 9px; font-family: Consolas, monospace; font-weight: 700; }")
         layout = QVBoxLayout(self)
         titulo = QLabel("Envie estes dados para a pessoa")
         titulo.setStyleSheet("font-size: 17px; font-weight: 700;")
@@ -27,12 +27,13 @@ class ConviteCriadoDialog(QDialog):
         layout.addWidget(QLabel("Código de convite:"))
         linha = QHBoxLayout()
         self.campo_codigo = QLineEdit(codigo)
+        self.campo_codigo.setObjectName("InviteCode")
         self.campo_codigo.setReadOnly(True)
         self.campo_codigo.selectAll()
         linha.addWidget(self.campo_codigo, 1)
         copiar = QPushButton("Copiar código")
         copiar.clicked.connect(self.copiar_codigo)
-        copiar.setStyleSheet("QPushButton { background: #0284c7; color: white; border: 0; border-radius: 6px; padding: 9px 12px; font-weight: 700; }")
+        definir_variante(copiar, "primary")
         linha.addWidget(copiar)
         layout.addLayout(linha)
         layout.addWidget(QLabel("E-mail do convite:"))
@@ -41,7 +42,7 @@ class ConviteCriadoDialog(QDialog):
         layout.addWidget(campo_email)
         fechar = QPushButton("Concluído")
         fechar.clicked.connect(self.accept)
-        fechar.setStyleSheet("QPushButton { background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; border-radius: 6px; padding: 9px; font-weight: 700; }")
+        definir_variante(fechar, "secondary")
         layout.addWidget(fechar)
 
     def copiar_codigo(self):
@@ -54,13 +55,14 @@ class EquipeScreen(QWidget):
 
     def __init__(self, database):
         super().__init__()
+        self.setObjectName("EquipeScreen")
         self.db = database
         self._montar_tela()
 
     def _montar_tela(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 26, 28, 26)
-        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
 
         titulo = QLabel("Equipe")
         titulo.setStyleSheet("font-size: 26px; font-weight: 700; color: #0f172a;")
@@ -87,18 +89,7 @@ class EquipeScreen(QWidget):
         esquerda.addWidget(self.tabela_convites, 1)
 
         cartao = QFrame()
-        cartao.setObjectName("CartaoConviteEquipe")
-        cartao.setStyleSheet("""
-            #CartaoConviteEquipe { background: #ffffff; border: 1px solid #dbe5f0; border-radius: 10px; }
-            #CartaoConviteEquipe QLabel { color: #0f172a; background: transparent; border: none; }
-            #CartaoConviteEquipe QLineEdit, #CartaoConviteEquipe QComboBox {
-                color: #0f172a; background: #ffffff; border: 1px solid #cbd5e1;
-                border-radius: 6px; padding: 8px;
-            }
-            #CartaoConviteEquipe QLineEdit:focus, #CartaoConviteEquipe QComboBox:focus { border: 2px solid #0284c7; }
-            #CartaoConviteEquipe QComboBox::drop-down { border: none; width: 24px; }
-            #CartaoConviteEquipe QComboBox QAbstractItemView { color: #0f172a; background: #ffffff; selection-background-color: #e0f2fe; }
-        """)
+        cartao.setObjectName("FormCard")
         cartao.setMaximumWidth(355)
         conteudo.addWidget(cartao, 2)
         form_layout = QVBoxLayout(cartao)
@@ -127,7 +118,7 @@ class EquipeScreen(QWidget):
         self.btn_convidar = QPushButton("Gerar convite")
         self.btn_convidar.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_convidar.clicked.connect(self.criar_convite)
-        self.btn_convidar.setStyleSheet("QPushButton { background: #0284c7; color: white; border: 0; border-radius: 6px; padding: 11px; font-weight: 700; } QPushButton:hover { background: #0369a1; }")
+        definir_variante(self.btn_convidar, "primary")
         form_layout.addWidget(self.btn_convidar)
         form_layout.addStretch()
 
@@ -144,16 +135,9 @@ class EquipeScreen(QWidget):
         tabela.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         tabela.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         tabela.verticalHeader().setVisible(False)
+        tabela.verticalHeader().setDefaultSectionSize(50)
         tabela.horizontalHeader().setStretchLastSection(True)
         tabela.setColumnWidth(len(cabecalhos) - 1, 190)
-        tabela.setStyleSheet("""
-            QTableWidget { background: #ffffff; color: #0f172a; border: 1px solid #dbe5f0; border-radius: 8px; gridline-color: #e2e8f0; }
-            QTableWidget::item { color: #0f172a; background: #ffffff; padding: 7px; }
-            QTableWidget::item:selected { color: #0f172a; background: #e0f2fe; }
-            QHeaderView::section { background: #f8fafc; color: #475569; font-weight: 700; padding: 8px; border: 0; border-bottom: 1px solid #dbe5f0; }
-            QTableWidget QPushButton { background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; border-radius: 5px; padding: 5px 7px; font-weight: 600; }
-            QTableWidget QPushButton:hover { background: #e0f2fe; color: #0369a1; }
-        """)
         return tabela
 
     @staticmethod
@@ -172,27 +156,19 @@ class EquipeScreen(QWidget):
         """Cria um botao de acao com dimensoes estaveis dentro da tabela."""
         botao = QPushButton(texto)
         botao.setCursor(Qt.CursorShape.PointingHandCursor)
-        botao.setFixedHeight(30)
+        botao.setFixedHeight(32)
         botao.setMinimumWidth(132)
         if tipo == "perigo":
-            botao.setStyleSheet(
-                "QPushButton { color: #b91c1c; background: #fef2f2; border: 1px solid #fca5a5; "
-                "border-radius: 6px; padding: 0 10px; font-weight: 700; font-size: 12px; } "
-                "QPushButton:hover { background: #fee2e2; }"
-            )
+            definir_variante(botao, "danger")
         else:
-            botao.setStyleSheet(
-                "QPushButton { color: #0369a1; background: #eff6ff; border: 1px solid #93c5fd; "
-                "border-radius: 6px; padding: 0 10px; font-weight: 700; font-size: 12px; } "
-                "QPushButton:hover { background: #dbeafe; }"
-            )
+            definir_variante(botao, "secondary")
         return botao
 
     @staticmethod
     def _celula_acoes(*botoes):
         container = QWidget()
         layout = QHBoxLayout(container)
-        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setContentsMargins(10, 7, 10, 7)
         layout.setSpacing(8)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         for botao in botoes:
@@ -231,7 +207,7 @@ class EquipeScreen(QWidget):
                 revogar = self._botao_acao("Revogar acesso", "perigo")
                 revogar.clicked.connect(lambda _, mid=membro.get("id"): self.revogar("membro", mid))
                 self.tabela_membros.setCellWidget(linha, 3, self._celula_acoes(alterar, revogar))
-            self.tabela_membros.setRowHeight(linha, 42)
+            self.tabela_membros.setRowHeight(linha, 50)
         self.tabela_membros.resizeColumnsToContents()
         self.tabela_membros.setColumnWidth(3, 310)
 
@@ -248,7 +224,7 @@ class EquipeScreen(QWidget):
             cancelar = self._botao_acao("Cancelar convite", "perigo")
             cancelar.clicked.connect(lambda _, cid=convite.get("id"): self.revogar("convite", cid))
             self.tabela_convites.setCellWidget(linha, 4, self._celula_acoes(renovar, cancelar))
-            self.tabela_convites.setRowHeight(linha, 42)
+            self.tabela_convites.setRowHeight(linha, 50)
         self.tabela_convites.resizeColumnsToContents()
         self.tabela_convites.setColumnWidth(4, 330)
 

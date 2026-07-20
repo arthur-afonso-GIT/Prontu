@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PySide6.QtGui import QPixmap, QDesktopServices, QColor, QDoubleValidator, QTextDocument
 from PySide6.QtCore import Qt, QUrl, QDate
 from PySide6.QtPrintSupport import QPrinter
+from ui.design_system import definir_variante
 from utils.operacao_segura import mensagem_erro_usuario, registrar_falha
 
 try:
@@ -34,12 +35,15 @@ EXTENSOES_ANEXO_ACEITAS = "Arquivos Suportados (*.jpg *.jpeg *.png *.webp *.pdf)
 NOME_BUCKET_ANEXOS = "fichas-anexos"
 
 
+class ErroUploadAnexo(RuntimeError):
+    """Indica que um arquivo não chegou ao armazenamento protegido."""
+
+
 class CustomInputDialog(QDialog):
     def __init__(self, titulo, mensagem, parent=None):
         super().__init__(parent)
         self.setWindowTitle(titulo)
         self.setFixedWidth(420)
-        self.setStyleSheet("background-color: #ffffff;")
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -51,28 +55,16 @@ class CustomInputDialog(QDialog):
         layout.addWidget(self.label)
         
         self.input_field = QLineEdit()
-        self.input_field.setStyleSheet("""
-            QLineEdit { 
-                background-color: #ffffff !important; 
-                color: #0f172a !important; 
-                border: 1px solid #cbd5e1 !important; 
-                border-radius: 6px; 
-                padding: 8px; 
-                font-size: 13px; 
-            }
-            QLineEdit:focus { border: 1px solid #0284c7 !important; }
-        """)
         layout.addWidget(self.input_field)
         
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(10)
         
         self.btn_cancelar = QPushButton("Cancelar")
-        self.btn_cancelar.setStyleSheet("QPushButton { background-color: #f1f5f9; color: #0f172a; border: 1px solid #cbd5e1; padding: 7px 14px; border-radius: 5px; font-weight: bold; } QPushButton:hover { background-color: #e2e8f0; }")
         self.btn_cancelar.clicked.connect(self.reject)
         
         self.btn_confirmar = QPushButton("Confirmar")
-        self.btn_confirmar.setStyleSheet("QPushButton { background-color: #0284c7; color: white; padding: 7px 14px; border-radius: 5px; font-weight: bold; border: none; } QPushButton:hover { background-color: #0369a1; }")
+        definir_variante(self.btn_confirmar, "primary")
         self.btn_confirmar.clicked.connect(self.accept)
         
         btn_layout.addStretch()
@@ -98,17 +90,6 @@ class ConfigurarCampoDialog(QDialog):
         self.campo_original = campo or {}
         self.setWindowTitle(f"Configurar {self.NOMES_TIPO.get(tipo, 'campo')}")
         self.setMinimumWidth(500)
-        self.setStyleSheet("""
-            QDialog { background: #ffffff; }
-            QLabel { color: #334155; background: transparent; }
-            QLineEdit, QTextEdit { background: #ffffff; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px; }
-            QLineEdit:focus, QTextEdit:focus { border-color: #0284c7; }
-            QCheckBox { color: #334155; background: transparent; spacing: 7px; }
-            QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #94a3b8; border-radius: 3px; background: #ffffff; }
-            QCheckBox::indicator:checked { background: #0284c7; border-color: #0284c7; }
-            QPushButton { background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 14px; font-weight: bold; }
-            QPushButton:hover { background: #e2e8f0; color: #0f172a; }
-        """)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(22, 20, 22, 20)
         layout.setSpacing(12)
@@ -174,10 +155,9 @@ class ConfigurarCampoDialog(QDialog):
 
         botoes = QHBoxLayout()
         btn_cancelar = QPushButton("Cancelar")
-        btn_cancelar.setStyleSheet("QPushButton { background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 14px; font-weight: bold; } QPushButton:hover { background: #e2e8f0; color: #0f172a; }")
         btn_cancelar.clicked.connect(self.reject)
         btn_salvar = QPushButton("Salvar campo")
-        btn_salvar.setStyleSheet("QPushButton { background: #0284c7; color: white; border: none; border-radius: 6px; padding: 8px 14px; font-weight: bold; } QPushButton:hover { background: #0369a1; }")
+        definir_variante(btn_salvar, "primary")
         btn_salvar.clicked.connect(self.validar_e_aceitar)
         botoes.addStretch()
         botoes.addWidget(btn_cancelar)
@@ -224,6 +204,7 @@ class ConfigurarCampoDialog(QDialog):
 class FichasScreen(QWidget):
     def __init__(self, database_instancia):
         super().__init__()
+        self.setObjectName("FichasScreen")
         
         self.db = database_instancia
         self._formulario_sujo = False
@@ -237,33 +218,13 @@ class FichasScreen(QWidget):
         self.arquivos_anexados = []  # Lista de caminhos locais pendentes de upload (limpa após salvar)
         
         self.main_layout = QHBoxLayout(self)
-        self.main_layout.setContentsMargins(20, 20, 20, 20)
-        self.main_layout.setSpacing(20)
+        self.main_layout.setContentsMargins(24, 24, 24, 24)
+        self.main_layout.setSpacing(24)
         
         # --- COLUNA ESQUERDA: Configurações ---
         self.left_panel = QFrame()
+        self.left_panel.setObjectName("FormCard")
         self.left_panel.setFixedWidth(320)
-        self.left_panel.setStyleSheet("""
-            QFrame { 
-                background-color: white; 
-                border: 1px solid #e2e8f0; 
-                border-radius: 12px; 
-            } 
-            QLabel { 
-                color: #0f172a !important; 
-                font-weight: 500; 
-                font-size: 13px; 
-                border: none; 
-                background-color: transparent;
-            }
-            QComboBox { 
-                background-color: #ffffff !important; 
-                color: #0f172a !important; 
-                border: 1px solid #cbd5e1 !important; 
-                border-radius: 6px; 
-                padding: 6px; 
-            }
-        """)
         self.left_layout = QVBoxLayout(self.left_panel)
         self.left_layout.setSpacing(12)
         self.left_layout.setContentsMargins(20, 20, 20, 20)
@@ -275,7 +236,6 @@ class FichasScreen(QWidget):
         self.left_layout.addWidget(QLabel("1. Selecione o Paciente:"))
         self.combo_paciente = QComboBox()
         self.combo_paciente.setView(QListView())
-        self.combo_paciente.view().setStyleSheet("QListView { background-color: #ffffff !important; color: #0f172a !important; selection-background-color: #0284c7; }")
         self.combo_paciente.setEditable(True)
         self.combo_paciente.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.combo_paciente.lineEdit().setPlaceholderText("Digite o nome do paciente...")
@@ -290,48 +250,34 @@ class FichasScreen(QWidget):
         self.left_layout.addWidget(QLabel("2. Modelo de Ficha Clínica:"))
         self.combo_modelo = QComboBox()
         self.combo_modelo.setView(QListView())
-        self.combo_modelo.view().setStyleSheet("QListView { background-color: #ffffff !important; color: #0f172a !important; selection-background-color: #0284c7; }")
         self.left_layout.addWidget(self.combo_modelo)
         
         botoes_importar_layout = QHBoxLayout()
         botoes_importar_layout.setSpacing(8)
 
         self.btn_importar = QPushButton("📥 Word (.docx)")
-        self.btn_importar.setStyleSheet("""
-            QPushButton { background-color: #f1f5f9; color: #0f172a; border: 1px solid #cbd5e1; padding: 10px; font-weight: bold; border-radius: 6px; }
-            QPushButton:hover { background-color: #e2e8f0; }
-        """)
+        definir_variante(self.btn_importar, "secondary")
         self.btn_importar.clicked.connect(self.importar_modelo_word)
         botoes_importar_layout.addWidget(self.btn_importar)
 
         self.btn_importar_pdf = QPushButton("📥 PDF")
-        self.btn_importar_pdf.setStyleSheet("""
-            QPushButton { background-color: #f1f5f9; color: #0f172a; border: 1px solid #cbd5e1; padding: 10px; font-weight: bold; border-radius: 6px; }
-            QPushButton:hover { background-color: #e2e8f0; }
-        """)
+        definir_variante(self.btn_importar_pdf, "secondary")
         self.btn_importar_pdf.clicked.connect(self.importar_modelo_pdf)
         botoes_importar_layout.addWidget(self.btn_importar_pdf)
 
         self.left_layout.addLayout(botoes_importar_layout)
         
         self.btn_criar_modelo = QPushButton("Montar novo modelo")
-        self.btn_criar_modelo.setStyleSheet("""
-            QPushButton { background-color: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 10px; font-weight: bold; border-radius: 6px; }
-            QPushButton:hover { background-color: #dcfce7; }
-        """)
+        definir_variante(self.btn_criar_modelo, "primary")
         self.btn_criar_modelo.clicked.connect(self.iniciar_criacao_modelo)
         self.left_layout.addWidget(self.btn_criar_modelo)
 
         acoes_modelo = QHBoxLayout()
         self.btn_editar_modelo = QPushButton("Editar modelo")
-        self.btn_editar_modelo.setStyleSheet(
-            "QPushButton { background-color: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd; padding: 8px; font-weight: bold; border-radius: 6px; }"
-        )
+        definir_variante(self.btn_editar_modelo, "secondary")
         self.btn_editar_modelo.clicked.connect(self.editar_modelo_selecionado)
         self.btn_excluir_modelo = QPushButton("Excluir modelo")
-        self.btn_excluir_modelo.setStyleSheet(
-            "QPushButton { background-color: #fff7ed; color: #c2410c; border: 1px solid #fdba74; padding: 8px; font-weight: bold; border-radius: 6px; }"
-        )
+        definir_variante(self.btn_excluir_modelo, "danger")
         self.btn_excluir_modelo.clicked.connect(self.excluir_modelo_selecionado)
         acoes_modelo.addWidget(self.btn_editar_modelo)
         acoes_modelo.addWidget(self.btn_excluir_modelo)
@@ -347,9 +293,7 @@ class FichasScreen(QWidget):
         self.anexos_scroll = QScrollArea()
         self.anexos_scroll.setWidgetResizable(True)
         self.anexos_scroll.setFixedHeight(90)
-        self.anexos_scroll.setStyleSheet("QScrollArea { border: 1px solid #e2e8f0; border-radius: 6px; background-color: #f8fafc; }")
         self.anexos_strip_widget = QWidget()
-        self.anexos_strip_widget.setStyleSheet("background-color: #f8fafc;")
         self.anexos_strip_layout = QHBoxLayout(self.anexos_strip_widget)
         self.anexos_strip_layout.setContentsMargins(6, 6, 6, 6)
         self.anexos_strip_layout.setSpacing(6)
@@ -358,20 +302,14 @@ class FichasScreen(QWidget):
         self.left_layout.addWidget(self.anexos_scroll)
 
         self.btn_anexar_arquivo = QPushButton("📎 Anexar Foto ou PDF")
-        self.btn_anexar_arquivo.setStyleSheet("""
-            QPushButton { background-color: #fffbeb; color: #92400e; border: 1px solid #fde68a; padding: 8px; font-weight: bold; border-radius: 6px; font-size: 12px; }
-            QPushButton:hover { background-color: #fef3c7; }
-        """)
+        definir_variante(self.btn_anexar_arquivo, "secondary")
         self.btn_anexar_arquivo.clicked.connect(self.anexar_arquivos)
         self.left_layout.addWidget(self.btn_anexar_arquivo)
         
         self.left_layout.addStretch()
         
         self.btn_salvar_atendimento = QPushButton("💾 Salvar Ficha Preenchida")
-        self.btn_salvar_atendimento.setStyleSheet("""
-            QPushButton { background-color: #0284c7; color: white; padding: 12px; font-weight: bold; border-radius: 6px; font-size: 14px; border: none; }
-            QPushButton:hover { background-color: #0369a1; }
-        """)
+        definir_variante(self.btn_salvar_atendimento, "primary")
         self.btn_salvar_atendimento.clicked.connect(self.salvar_ficha_preenchida)
         self.left_layout.addWidget(self.btn_salvar_atendimento)
 
@@ -380,11 +318,7 @@ class FichasScreen(QWidget):
         self.btn_exportar_word = QPushButton("Exportar Word")
         self.btn_exportar_pdf = QPushButton("Exportar PDF")
         for botao in (self.btn_exportar_word, self.btn_exportar_pdf):
-            botao.setStyleSheet(
-                "QPushButton { background: #f1f5f9; color: #1e3a8a; border: 1px solid #bfdbfe; "
-                "border-radius: 6px; padding: 7px; font-weight: bold; font-size: 12px; } "
-                "QPushButton:hover { background: #dbeafe; }"
-            )
+            definir_variante(botao, "secondary")
         self.btn_exportar_word.clicked.connect(self.exportar_ficha_word)
         self.btn_exportar_pdf.clicked.connect(self.exportar_ficha_pdf)
         exportacoes_layout.addWidget(self.btn_exportar_word)
@@ -393,9 +327,7 @@ class FichasScreen(QWidget):
 
         self.btn_cancelar_edicao = QPushButton("Cancelar edição da ficha")
         self.btn_cancelar_edicao.setVisible(False)
-        self.btn_cancelar_edicao.setStyleSheet(
-            "QPushButton { background-color: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; padding: 7px; font-weight: bold; border-radius: 6px; }"
-        )
+        definir_variante(self.btn_cancelar_edicao, "secondary")
         self.btn_cancelar_edicao.clicked.connect(self.cancelar_edicao_ficha)
         self.left_layout.addWidget(self.btn_cancelar_edicao)
 
@@ -413,11 +345,9 @@ class FichasScreen(QWidget):
         
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setStyleSheet("QScrollArea { border: 1px solid #e2e8f0; border-radius: 12px; background-color: white; }")
         
-        self.scroll_content = QWidget()
-        self.scroll_content.setObjectName("ScrollContent")
-        self.scroll_content.setStyleSheet("#ScrollContent { background-color: white; }")
+        self.scroll_content = QFrame()
+        self.scroll_content.setObjectName("FormCard")
         
         self.dinamic_form_layout = QVBoxLayout(self.scroll_content)
         self.dinamic_form_layout.setSpacing(14)
@@ -613,13 +543,9 @@ class FichasScreen(QWidget):
         btn_add_multipla = QPushButton("+ Múltipla Escolha")
         btn_modelo_inicial = QPushButton("Usar modelo inicial")
         
-        estilo_botoes_add = """
-            QPushButton { background-color: #f8fafc; color: #334155; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; font-weight: bold; font-size: 12px;}
-            QPushButton:hover { background-color: #f1f5f9; border: 1px solid #94a3b8; }
-        """
         botoes_add = [btn_add_secao, btn_add_curto, btn_add_longo, btn_add_check, btn_add_numero, btn_add_data, btn_add_multipla, btn_modelo_inicial]
         for indice_botao, b in enumerate(botoes_add):
-            b.setStyleSheet(estilo_botoes_add)
+            definir_variante(b, "secondary")
             if indice_botao < 4:
                 primeira_linha_botoes.addWidget(b)
             else:
@@ -654,11 +580,11 @@ class FichasScreen(QWidget):
         acoes_layout.setContentsMargins(0, 10, 0, 0)
         
         btn_cancelar = QPushButton("Cancelar")
-        btn_cancelar.setStyleSheet("QPushButton { background-color: #ef4444; color: white; padding: 11px 20px; border-radius: 6px; font-weight: bold; border: none; } QPushButton:hover { background-color: #dc2626; }")
+        definir_variante(btn_cancelar, "secondary")
         btn_cancelar.clicked.connect(self.gerar_modelo_padrao)
         
         btn_finalizar = QPushButton("💾 Concluir e Salvar Modelo")
-        btn_finalizar.setStyleSheet("QPushButton { background-color: #16a34a; color: white; padding: 11px 24px; border-radius: 6px; font-weight: bold; border: none; } QPushButton:hover { background-color: #15803d; }")
+        definir_variante(btn_finalizar, "primary")
         btn_finalizar.clicked.connect(self.salvar_modelo_customizado_db)
         
         acoes_layout.addWidget(btn_cancelar)
@@ -1014,19 +940,25 @@ class FichasScreen(QWidget):
             return
             
         try:
+            # O Supabase espera este identificador como número. Garantir a conversão
+            # evita que uma sessão restaurada com valor textual impeça o salvamento.
+            consultorio_id = int(self.db.consultorio_id)
+            estrutura_json = json.loads(json.dumps(self.modelo_atual_campos, ensure_ascii=False))
             payload = {
-                "consultorio_id": self.db.consultorio_id,
+                "consultorio_id": consultorio_id,
                 "nome_modelo": nome_modelo,
-                "estrutura_json": self.modelo_atual_campos
+                "estrutura_json": estrutura_json,
             }
             
-            # Executa o upsert para evitar duplicações de modelos dentro do mesmo consultório
+            # Usa o primeiro modelo encontrado. Isso continua funcionando mesmo se
+            # existirem cópias antigas com o mesmo nome no banco.
             existente = self.db.supabase.table("modelos_fichas").select("id") \
-                .eq("consultorio_id", self.db.consultorio_id) \
-                .eq("nome_modelo", nome_modelo).maybe_single().execute()
-            if existente.data:
-                self.db.supabase.table("modelos_fichas").update({"estrutura_json": self.modelo_atual_campos}) \
-                    .eq("id", existente.data["id"]).eq("consultorio_id", self.db.consultorio_id).execute()
+                .eq("consultorio_id", consultorio_id) \
+                .eq("nome_modelo", nome_modelo).limit(1).execute()
+            modelo_existente = (existente.data or [None])[0]
+            if modelo_existente:
+                self.db.supabase.table("modelos_fichas").update({"estrutura_json": estrutura_json}) \
+                    .eq("id", modelo_existente["id"]).eq("consultorio_id", consultorio_id).execute()
             else:
                 self.db.supabase.table("modelos_fichas").insert(payload).execute()
             
@@ -1282,7 +1214,52 @@ class FichasScreen(QWidget):
 
             self.anexos_strip_layout.addWidget(miniatura)
 
+        # Ao abrir uma ficha já salva, os anexos que já estão no prontuário
+        # também aparecem aqui para que possam ser consultados novamente.
+        for anexo in self._anexos_existentes:
+            if not isinstance(anexo, dict) or not anexo.get("caminho"):
+                continue
+            nome = str(anexo.get("nome") or "Anexo")
+            tipo = str(anexo.get("tipo") or "")
+            eh_pdf = "pdf" in tipo.lower() or nome.lower().endswith(".pdf")
+            miniatura = QFrame()
+            miniatura.setFixedSize(72, 72)
+            miniatura.setToolTip(f"Abrir anexo: {nome}")
+            miniatura.setCursor(Qt.CursorShape.PointingHandCursor)
+            miniatura.setStyleSheet("QFrame { background-color: #ffffff; border: 1px solid #9acdf1; border-radius: 6px; }")
+            layout_miniatura = QVBoxLayout(miniatura)
+            layout_miniatura.setContentsMargins(4, 4, 4, 4)
+            rotulo = QLabel("PDF" if eh_pdf else "Imagem")
+            rotulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            rotulo.setStyleSheet("border: none; background: transparent; color: #075985; font-size: 11px; font-weight: 700;")
+            layout_miniatura.addWidget(rotulo)
+            nome_rotulo = QLabel(nome[:12] + ("…" if len(nome) > 12 else ""))
+            nome_rotulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            nome_rotulo.setWordWrap(True)
+            nome_rotulo.setStyleSheet("border: none; background: transparent; color: #52657f; font-size: 9px;")
+            layout_miniatura.addWidget(nome_rotulo)
+            miniatura.mousePressEvent = lambda event, a=anexo: self.abrir_anexo_remoto(a)
+            self.anexos_strip_layout.addWidget(miniatura)
+
         self.anexos_strip_layout.addStretch()
+
+    def abrir_anexo_remoto(self, anexo):
+        """Abre um anexo já salvo usando um link temporário e protegido."""
+        caminho = str(anexo.get("caminho") or "")
+        if not caminho or not self.db.supabase:
+            return
+        try:
+            resposta = self.db.supabase.storage.from_(NOME_BUCKET_ANEXOS).create_signed_url(caminho, 120)
+            if isinstance(resposta, dict):
+                url = resposta.get("signedURL") or resposta.get("signed_url")
+            else:
+                url = str(resposta or "")
+            if not url:
+                raise RuntimeError("link temporário não disponível")
+            QDesktopServices.openUrl(QUrl(str(url)))
+        except Exception as erro:
+            registrar_falha("abrir anexo", erro)
+            self.exibir_popup("erro", "Anexo indisponível", "Não foi possível abrir este anexo agora. Tente novamente.")
 
     def _fazer_upload_anexos(self, paciente_id):
         """Envia cada arquivo pendente para o Supabase Storage e retorna a lista
@@ -1311,8 +1288,12 @@ class FichasScreen(QWidget):
                     "caminho": caminho_no_bucket,
                     "tipo": tipo_mime
                 })
-            except Exception as e:
-                print(f"Erro ao enviar anexo '{caminho_local}': {e}")
+            except Exception as erro:
+                registrar_falha("enviar anexo", erro)
+                raise ErroUploadAnexo(
+                    f"Não foi possível enviar o arquivo '{nome_original}'. "
+                    "A ficha não foi salva para evitar que ela fique sem o anexo."
+                ) from erro
 
         return lista_metadados
 
@@ -1379,6 +1360,7 @@ class FichasScreen(QWidget):
             anexos = ficha.get("anexos") or []
             self._anexos_existentes = anexos if isinstance(anexos, list) else json.loads(anexos)
             self.arquivos_anexados = []
+            self.renderizar_anexos_thumbnails()
             self.combo_paciente.setEnabled(False)
             self.combo_modelo.setEnabled(False)
             self.btn_salvar_atendimento.setText("Salvar alterações da ficha")
@@ -1424,6 +1406,7 @@ class FichasScreen(QWidget):
         self.ficha_em_edicao_id = None
         self._data_atendimento_original = None
         self._anexos_existentes = []
+        self.renderizar_anexos_thumbnails()
         self.combo_paciente.setEnabled(True)
         self.combo_modelo.setEnabled(True)
         self.btn_salvar_atendimento.setText("Salvar Ficha Preenchida")
@@ -1738,11 +1721,20 @@ class FichasScreen(QWidget):
             paciente_id = int(paciente_id)
             ficha_em_edicao_id = int(self.ficha_em_edicao_id) if self.ficha_em_edicao_id is not None else None
             editando_ficha = ficha_em_edicao_id is not None
+            # Envia os arquivos antes de gravar a ficha. Assim, se o Storage
+            # estiver indisponível, a ficha não aparece como salva sem o anexo.
+            anexos_finais = list(self._anexos_existentes)
+            if self.arquivos_anexados:
+                anexos_finais.extend(self._fazer_upload_anexos(paciente_id))
+
             if editando_ficha:
                 # Edição não altera os vínculos da ficha: atualiza somente as respostas.
-                self.db.supabase.table("fichas_preenchidas").update(
-                    {"dados_respostas": respostas}
-                ).eq("id", ficha_em_edicao_id).execute()
+                dados_atualizados = {"dados_respostas": respostas}
+                if self.arquivos_anexados:
+                    dados_atualizados["anexos"] = anexos_finais
+                self.db.supabase.table("fichas_preenchidas").update(dados_atualizados).eq(
+                    "id", ficha_em_edicao_id
+                ).execute()
                 ficha_id = ficha_em_edicao_id
             else:
                 payload = {
@@ -1751,19 +1743,10 @@ class FichasScreen(QWidget):
                     "modelo_nome": modelo_nome,
                     "dados_respostas": respostas,
                     "data_atendimento": data_atual,
+                    "anexos": anexos_finais,
                 }
                 resposta_insert = self.db.supabase.table("fichas_preenchidas").insert(payload).execute()
                 ficha_id = resposta_insert.data[0]["id"] if resposta_insert.data else None
-
-            # Se houver fotos/PDFs pendentes, envia agora para o Storage e vincula à ficha recém-criada
-            if self.arquivos_anexados and ficha_id:
-                metadados_anexos = self._fazer_upload_anexos(paciente_id)
-                if metadados_anexos:
-                    anexos_finais = self._anexos_existentes + metadados_anexos
-                    self.db.supabase.table("fichas_preenchidas")\
-                        .update({"anexos": json.dumps(anexos_finais, ensure_ascii=False)})\
-                        .eq("id", ficha_id)\
-                        .execute()
             
             # Limpa os campos após salvar com sucesso
             campos_por_id = {campo.get("id"): campo for campo in self.modelo_atual_campos}
@@ -1779,15 +1762,18 @@ class FichasScreen(QWidget):
             self.renderizar_anexos_thumbnails()
             self._formulario_sujo = False
                 
+            janela = getattr(self, "window_principal", None)
+            tela_pacientes = getattr(janela, "screen_pacientes", None) if janela else None
+            if tela_pacientes and tela_pacientes.id_em_edicao == paciente_id:
+                tela_pacientes.carregar_historico_fichas_paciente(paciente_id)
+
             if editando_ficha:
                 self.cancelar_edicao_ficha()
-                janela = getattr(self, "window_principal", None)
-                tela_pacientes = getattr(janela, "screen_pacientes", None) if janela else None
-                if tela_pacientes and tela_pacientes.id_em_edicao == paciente_id:
-                    tela_pacientes.carregar_historico_fichas_paciente(paciente_id)
                 self.exibir_popup("info", "Ficha atualizada", "As alterações foram salvas no atendimento original.")
             else:
                 self.exibir_popup("info", "Ficha Salva", "O atendimento foi registrado com sucesso!")
+        except ErroUploadAnexo as erro:
+            self.exibir_popup("erro", "Anexo não enviado", str(erro))
         except Exception as e:
             registrar_falha("salvar ficha preenchida", e)
             self.exibir_popup("erro", "Ficha não salva", mensagem_erro_usuario("salvar a ficha"))

@@ -6,14 +6,21 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, 
                                QComboBox, QDateEdit, QHeaderView, QFrame, QTextEdit, QMessageBox, 
                                QListWidget, QListWidgetItem, QDialog, QScrollArea, QCalendarWidget,
-                               QFileDialog)
+                               QFileDialog, QCheckBox)
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor
+from ui.design_system import definir_variante
 from utils.operacao_segura import (
     finalizar_operacao,
     iniciar_operacao,
     mensagem_erro_usuario,
     registrar_falha,
+)
+
+NOME_BUCKET_ANEXOS = "fichas-anexos"
+MENSAGEM_WHATSAPP_MANUAL_PADRAO = (
+    "Olá, {paciente}! Tudo bem? Aqui é {profissional}, da clínica. "
+    "Como podemos ajudar?"
 )
 from services.importador_pacientes import (
     ler_planilha, preparar_registros, classificar_registros, payload_novo, payload_atualizacao,
@@ -53,7 +60,6 @@ class VisualizarFichaHistoricoDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"Histórico: {titulo_ficha}")
         self.setMinimumSize(500, 450)
-        self.setStyleSheet("background-color: #ffffff;")
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -69,7 +75,6 @@ class VisualizarFichaHistoricoDialog(QDialog):
         
         self.txt_conteudo = QTextEdit()
         self.txt_conteudo.setReadOnly(True)
-        self.txt_conteudo.setStyleSheet("QTextEdit { background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; color: #0f172a; font-size: 13px; }")
         
         texto_formatado = ""
         try:
@@ -88,7 +93,7 @@ class VisualizarFichaHistoricoDialog(QDialog):
         layout.addWidget(self.txt_conteudo)
         
         btn_fechar = QPushButton("Fechar Visualização")
-        btn_fechar.setStyleSheet("QPushButton { background-color: #0284c7; color: white; padding: 8px; border-radius: 6px; font-weight: bold; border: none; } QPushButton:hover { background-color: #0369a1; }")
+        definir_variante(btn_fechar, "primary")
         btn_fechar.clicked.connect(self.accept)
         layout.addWidget(btn_fechar)
 
@@ -120,7 +125,6 @@ class EditarFichaHistoricoDialog(QDialog):
 
         area_rolagem = QScrollArea()
         area_rolagem.setWidgetResizable(True)
-        area_rolagem.setStyleSheet("QScrollArea { border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; }")
         conteudo = QWidget()
         campos_layout = QVBoxLayout(conteudo)
         campos_layout.setContentsMargins(14, 14, 14, 14)
@@ -136,12 +140,10 @@ class EditarFichaHistoricoDialog(QDialog):
                 entrada.addItem("Sim", True)
                 entrada.addItem("Não", False)
                 entrada.setCurrentIndex(0 if valor else 1)
-                entrada.setStyleSheet("QComboBox { padding: 7px; background: white; border: 1px solid #cbd5e1; border-radius: 6px; }")
             else:
                 entrada = QTextEdit()
                 entrada.setPlainText("" if valor is None else str(valor))
                 entrada.setFixedHeight(64)
-                entrada.setStyleSheet("QTextEdit { padding: 7px; background: white; border: 1px solid #cbd5e1; border-radius: 6px; }")
             self._campos[campo] = entrada
             campos_layout.addWidget(entrada)
         campos_layout.addStretch()
@@ -152,7 +154,7 @@ class EditarFichaHistoricoDialog(QDialog):
         btn_cancelar = QPushButton("Cancelar")
         btn_cancelar.clicked.connect(self.reject)
         btn_salvar = QPushButton("Salvar alterações")
-        btn_salvar.setStyleSheet("QPushButton { background: #0284c7; color: white; border: none; border-radius: 6px; padding: 9px 16px; font-weight: bold; } QPushButton:hover { background: #0369a1; }")
+        definir_variante(btn_salvar, "primary")
         btn_salvar.clicked.connect(self.salvar)
         botoes.addStretch()
         botoes.addWidget(btn_cancelar)
@@ -176,12 +178,6 @@ class ImportarPacientesDialog(QDialog):
         self.campos_presentes = set()
         self.setWindowTitle("Importar pacientes")
         self.setMinimumSize(760, 520)
-        self.setStyleSheet("""
-            QDialog { background-color: #ffffff; }
-            QLabel { color: #334155; background: transparent; }
-            QComboBox { background: #ffffff; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 6px; padding: 7px; }
-            QComboBox QAbstractItemView { background: #ffffff; color: #0f172a; selection-background-color: #e0f2fe; selection-color: #075985; }
-        """)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(22, 20, 22, 20)
@@ -197,9 +193,9 @@ class ImportarPacientesDialog(QDialog):
 
         arquivo_layout = QHBoxLayout()
         self.lbl_arquivo = QLabel("Nenhum arquivo selecionado")
-        self.lbl_arquivo.setStyleSheet("color: #475569; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px;")
+        self.lbl_arquivo.setObjectName("ImportFileName")
         btn_arquivo = QPushButton("Escolher arquivo")
-        btn_arquivo.setStyleSheet("QPushButton { background: #eff6ff; color: #0369a1; border: 1px solid #93c5fd; border-radius: 6px; padding: 8px 12px; font-weight: bold; } QPushButton:hover { background: #dbeafe; }")
+        definir_variante(btn_arquivo, "secondary")
         btn_arquivo.clicked.connect(self.escolher_arquivo)
         arquivo_layout.addWidget(self.lbl_arquivo, stretch=1)
         arquivo_layout.addWidget(btn_arquivo)
@@ -225,12 +221,6 @@ class ImportarPacientesDialog(QDialog):
         self.tabela_previa.verticalHeader().setVisible(False)
         self.tabela_previa.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tabela_previa.setSelectionMode(QTableWidget.NoSelection)
-        self.tabela_previa.setStyleSheet("""
-            QTableWidget { background: #ffffff; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 7px; gridline-color: #e2e8f0; }
-            QTableWidget::item { background: #ffffff; color: #0f172a; padding: 7px; }
-            QTableWidget::item:hover { background: #f0f9ff; color: #075985; }
-            QHeaderView::section { background: #f8fafc; color: #475569; font-weight: bold; padding: 7px; border: none; border-bottom: 1px solid #cbd5e1; }
-        """)
         cabecalho = self.tabela_previa.horizontalHeader()
         cabecalho.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         for coluna in range(1, 5):
@@ -242,7 +232,7 @@ class ImportarPacientesDialog(QDialog):
         btn_cancelar.clicked.connect(self.reject)
         self.btn_importar = QPushButton("Confirmar importação")
         self.btn_importar.setEnabled(False)
-        self.btn_importar.setStyleSheet("QPushButton { background: #0284c7; color: white; border: none; border-radius: 6px; padding: 9px 16px; font-weight: bold; } QPushButton:hover { background: #0369a1; } QPushButton:disabled { background: #cbd5e1; color: #64748b; }")
+        definir_variante(self.btn_importar, "primary")
         self.btn_importar.clicked.connect(self.confirmar_importacao)
         acoes.addStretch()
         acoes.addWidget(btn_cancelar)
@@ -384,6 +374,7 @@ class ImportarPacientesDialog(QDialog):
 class PacientesScreen(QWidget):
     def __init__(self, database_instancia):
         super().__init__()
+        self.setObjectName("PacientesScreen")
         
         # Recebe a conexão única já configurada e autenticada a partir da MainWindow
         self.db = database_instancia
@@ -393,8 +384,8 @@ class PacientesScreen(QWidget):
         self.pastas_cores = {}  # Preenchido pela MainWindow: {nome_da_pasta: "#hex"}
         
         main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(15, 15, 15, 15)
-        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(24, 24, 24, 24)
+        main_layout.setSpacing(24)
         
         # --- COLUNA DA ESQUERDA: BUSCA E LISTA ---
         left_container = QWidget()
@@ -406,43 +397,18 @@ class PacientesScreen(QWidget):
         
         self.input_busca = QLineEdit()
         self.input_busca.setPlaceholderText("🔍 Buscar paciente por nome, CPF, RG ou telefone...")
-        self.input_busca.setStyleSheet("""
-            QLineEdit {
-                padding: 9px;
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                background-color: white;
-                color: #0f172a;
-                font-size: 13px;
-                min-height: 20px;
-            }
-            QLineEdit:focus { border: 1px solid #0284c7; }
-        """)
         self.input_busca.textChanged.connect(self.filtrar_pacientes)
         filter_layout.addWidget(self.input_busca)
         
         self.combo_filtro_pasta = QComboBox()
         self.combo_filtro_pasta.addItem("📁 Todas as Pastas")
-        self.combo_filtro_pasta.setStyleSheet("""
-            QComboBox {
-                padding: 8px;
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                background-color: white;
-                color: #0f172a;
-                min-width: 150px;
-                min-height: 20px;
-            }
-        """)
+        self.combo_filtro_pasta.setMinimumWidth(170)
         self.combo_filtro_pasta.currentTextChanged.connect(self.filtrar_pacientes)
         filter_layout.addWidget(self.combo_filtro_pasta)
 
         self.btn_importar_pacientes = QPushButton("Importar pacientes")
         self.btn_importar_pacientes.setToolTip("Importe uma planilha CSV ou Excel com pacientes já cadastrados")
-        self.btn_importar_pacientes.setStyleSheet("""
-            QPushButton { background: #dbeafe; color: #075985; border: 1px solid #7dd3fc; border-radius: 6px; padding: 8px 12px; font-weight: bold; min-height: 20px; }
-            QPushButton:hover { background: #bae6fd; border-color: #0ea5e9; }
-        """)
+        definir_variante(self.btn_importar_pacientes, "secondary")
         self.btn_importar_pacientes.clicked.connect(self.abrir_importador_pacientes)
         filter_layout.addWidget(self.btn_importar_pacientes)
 
@@ -455,30 +421,6 @@ class PacientesScreen(QWidget):
         self.tabela.setSelectionBehavior(QTableWidget.SelectRows)
         self.tabela.setSelectionMode(QTableWidget.SingleSelection)
         self.tabela.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.tabela.setStyleSheet("""
-            QTableWidget {
-                background-color: white;
-                color: #0f172a;
-                border: 1px solid #e2e8f0;
-                border-radius: 8px;
-                gridline-color: #f1f5f9;
-            }
-            QTableWidget::item { padding: 8px; }
-            QTableWidget::item:selected {
-                background-color: #f0f9ff;
-                color: #0369a1;
-                font-weight: 500;
-            }
-            QHeaderView::section {
-                background-color: #f8fafc;
-                color: #475569;
-                font-weight: bold;
-                font-size: 12px;
-                border: none;
-                border-bottom: 2px solid #e2e8f0;
-                padding: 8px;
-            }
-        """)
         
         cabecalho = self.tabela.horizontalHeader()
         cabecalho.setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -493,19 +435,7 @@ class PacientesScreen(QWidget):
         
         # --- COLUNA DA DIREITA: FORMULÁRIO DE CADASTRO ---
         self.right_container = QFrame()
-        self.right_container.setObjectName("FormContainer")
-        self.right_container.setStyleSheet("""
-            QFrame#FormContainer {
-                background-color: white;
-                border: 1px solid #e2e8f0;
-                border-radius: 12px;
-            }
-            QLabel {
-                color: #334155;
-                font-weight: 500;
-                font-size: 11px;
-            }
-        """)
+        self.right_container.setObjectName("FormCard")
         self.right_container.setFixedWidth(420)
         
         right_layout = QVBoxLayout(self.right_container)
@@ -515,20 +445,6 @@ class PacientesScreen(QWidget):
         self.lbl_form_titulo = QLabel("👤 Novo Prontuário Clínico")
         self.lbl_form_titulo.setStyleSheet("font-size: 15px; font-weight: bold; color: #0f172a; padding-bottom: 2px;")
         right_layout.addWidget(self.lbl_form_titulo)
-        
-        input_style = """
-            QLineEdit, QComboBox, QDateEdit {
-                padding: 5px;
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                background-color: white;
-                color: #0f172a;
-                min-height: 24px;
-            }
-            QLineEdit:focus, QComboBox:focus, QDateEdit:focus {
-                border: 1px solid #0284c7;
-            }
-        """
         
         calendar_style = """
             QCalendarWidget QWidget { 
@@ -553,14 +469,12 @@ class PacientesScreen(QWidget):
         
         right_layout.addWidget(QLabel("Nome Completo:*"))
         self.input_nome = QLineEdit()
-        self.input_nome.setStyleSheet(input_style)
         right_layout.addWidget(self.input_nome)
         
         layout_tel_zap = QHBoxLayout()
         v_box_tel = QVBoxLayout()
         v_box_tel.addWidget(QLabel("Telefone / Celular:"))
         self.input_tel = QLineEdit()
-        self.input_tel.setStyleSheet(input_style)
         self.input_tel.setPlaceholderText("Ex: 11999998888")
         v_box_tel.addWidget(self.input_tel)
         layout_tel_zap.addLayout(v_box_tel)
@@ -582,6 +496,12 @@ class PacientesScreen(QWidget):
         self.btn_whatsapp.clicked.connect(self.abrir_whatsapp_paciente)
         layout_tel_zap.addWidget(self.btn_whatsapp)
         right_layout.addLayout(layout_tel_zap)
+
+        self.check_lembretes_whatsapp = QCheckBox("Autoriza receber lembretes de consulta pelo WhatsApp")
+        self.check_lembretes_whatsapp.setToolTip(
+            "Marque somente após a autorização do paciente. A automação usará esta preferência."
+        )
+        right_layout.addWidget(self.check_lembretes_whatsapp)
         
         row_nasc_sexo = QHBoxLayout()
         box_nasc = QVBoxLayout()
@@ -591,7 +511,6 @@ class PacientesScreen(QWidget):
         self.input_nasc.calendarWidget().setStyleSheet(calendar_style)
         self.input_nasc.setDisplayFormat("dd/MM/yyyy")
         self.input_nasc.setDate(QDate(1990, 1, 1))
-        self.input_nasc.setStyleSheet(input_style)
         box_nasc.addWidget(self.input_nasc)
         row_nasc_sexo.addLayout(box_nasc)
         
@@ -599,7 +518,6 @@ class PacientesScreen(QWidget):
         box_sexo.addWidget(QLabel("Sexo Biológico:"))
         self.input_sexo = QComboBox()
         self.input_sexo.addItems(["Masculino", "Feminino", "Outro"])
-        self.input_sexo.setStyleSheet(input_style)
         box_sexo.addWidget(self.input_sexo)
         row_nasc_sexo.addLayout(box_sexo)
         right_layout.addLayout(row_nasc_sexo)
@@ -608,7 +526,6 @@ class PacientesScreen(QWidget):
         box_cpf = QVBoxLayout()
         box_cpf.addWidget(QLabel("CPF:"))
         self.input_cpf = QLineEdit()
-        self.input_cpf.setStyleSheet(input_style)
         self.input_cpf.setPlaceholderText("000.000.000-00")
         self.input_cpf.setMaxLength(14)
         self.input_cpf.textEdited.connect(self._formatar_cpf_ao_digitar)
@@ -618,7 +535,6 @@ class PacientesScreen(QWidget):
         box_rg = QVBoxLayout()
         box_rg.addWidget(QLabel("RG:"))
         self.input_rg = QLineEdit()
-        self.input_rg.setStyleSheet(input_style)
         box_rg.addWidget(self.input_rg)
         row_docs.addLayout(box_rg)
         right_layout.addLayout(row_docs)
@@ -627,51 +543,36 @@ class PacientesScreen(QWidget):
         box_civil = QVBoxLayout()
         box_civil.addWidget(QLabel("Estado Civil:"))
         self.input_civil = QLineEdit()
-        self.input_civil.setStyleSheet(input_style)
         box_civil.addWidget(self.input_civil)
         row_social.addLayout(box_civil)
         
         box_prof = QVBoxLayout()
         box_prof.addWidget(QLabel("Profissão:"))
         self.input_profissao = QLineEdit()
-        self.input_profissao.setStyleSheet(input_style)
         box_prof.addWidget(self.input_profissao)
         row_social.addLayout(box_prof)
         right_layout.addLayout(row_social)
         
         right_layout.addWidget(QLabel("Endereço Residencial Completo:"))
         self.input_endereco = QLineEdit()
-        self.input_endereco.setStyleSheet(input_style)
         right_layout.addWidget(self.input_endereco)
         
         row_conv_pasta = QHBoxLayout()
         box_conv = QVBoxLayout()
         box_conv.addWidget(QLabel("Convênio / Plano:"))
         self.input_convenio = QLineEdit("PARTICULAR")
-        self.input_convenio.setStyleSheet(input_style)
         box_conv.addWidget(self.input_convenio)
         row_conv_pasta.addLayout(box_conv)
         
         box_pasta = QVBoxLayout()
         box_pasta.addWidget(QLabel("Alocar na Pasta:"))
         self.input_pasta = QComboBox()
-        self.input_pasta.setStyleSheet(input_style)
         box_pasta.addWidget(self.input_pasta)
         row_conv_pasta.addLayout(box_pasta)
         right_layout.addLayout(row_conv_pasta)
         
         right_layout.addWidget(QLabel("Queixa Principal Inicial (Motivo da abertura):"))
         self.input_qp = QTextEdit()
-        self.input_qp.setStyleSheet("""
-            QTextEdit {
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                background-color: white;
-                color: #0f172a;
-                padding: 6px;
-            }
-            QTextEdit:focus { border: 1px solid #0284c7; }
-        """)
         self.input_qp.setFixedHeight(50)
         right_layout.addWidget(self.input_qp)
         
@@ -680,51 +581,35 @@ class PacientesScreen(QWidget):
         right_layout.addWidget(sep)
         right_layout.addWidget(QLabel("📋 Prontuários Ocorridos (Duplo clique para abrir):"))
         self.list_historico_fichas = QListWidget()
-        self.list_historico_fichas.setStyleSheet("""
-            QListWidget { 
-                background-color: #f8fafc; 
-                border: 1px solid #cbd5e1; 
-                border-radius: 6px; 
-                color: #0f172a; 
-            } 
-            QListWidget::item { 
-                padding: 4px; 
-                border-bottom: 1px solid #e2e8f0; 
-            } 
-            QListWidget::item:hover { 
-                background-color: #e2e8f0; 
-                border-radius: 4px; 
-            }
-        """)
         self.list_historico_fichas.setFixedHeight(115)
         self.list_historico_fichas.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.list_historico_fichas.setToolTip("Use a roda do mouse ou a barra lateral para ver fichas mais antigas.")
+        self.list_historico_fichas.itemSelectionChanged.connect(self._atualizar_acao_anexos_ficha)
         self.list_historico_fichas.itemDoubleClicked.connect(self.abrir_ficha_historico_selecionada)
         right_layout.addWidget(self.list_historico_fichas)
 
         acoes_historico = QHBoxLayout()
         acoes_historico.setSpacing(6)
+        self.btn_ver_anexos_ficha = QPushButton("Ver anexos")
+        self.btn_ver_anexos_ficha.setToolTip("Abrir fotos e PDFs vinculados à ficha selecionada")
+        definir_variante(self.btn_ver_anexos_ficha, "secondary")
+        self.btn_ver_anexos_ficha.setEnabled(False)
+        self.btn_ver_anexos_ficha.clicked.connect(self.ver_anexos_ficha_selecionada)
+        acoes_historico.addWidget(self.btn_ver_anexos_ficha)
+
         self.btn_abrir_ficha = QPushButton("Abrir")
-        self.btn_abrir_ficha.setStyleSheet(
-            "QPushButton { background-color: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd; "
-            "border-radius: 6px; padding: 6px; font-weight: bold; }"
-        )
+        definir_variante(self.btn_abrir_ficha, "secondary")
         self.btn_abrir_ficha.clicked.connect(self.abrir_ficha_historico_atual)
         acoes_historico.addWidget(self.btn_abrir_ficha)
 
         self.btn_editar_ficha = QPushButton("Editar")
-        self.btn_editar_ficha.setStyleSheet(
-            "QPushButton { background-color: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; "
-            "border-radius: 6px; padding: 6px; font-weight: bold; }"
-        )
+        definir_variante(self.btn_editar_ficha, "primary")
         self.btn_editar_ficha.clicked.connect(self.editar_ficha_historico_selecionada)
         acoes_historico.addWidget(self.btn_editar_ficha)
 
-        self.btn_excluir_ficha = QPushButton("Excluir ficha selecionada")
-        self.btn_excluir_ficha.setStyleSheet(
-            "QPushButton { background-color: #fff7ed; color: #c2410c; border: 1px solid #fdba74; "
-            "border-radius: 6px; padding: 6px; font-weight: bold; }"
-        )
+        self.btn_excluir_ficha = QPushButton("Excluir ficha")
+        self.btn_excluir_ficha.setToolTip("Excluir a ficha selecionada do prontuário")
+        definir_variante(self.btn_excluir_ficha, "danger")
         self.btn_excluir_ficha.clicked.connect(self.excluir_ficha_historico_selecionada)
         acoes_historico.addWidget(self.btn_excluir_ficha)
         right_layout.addLayout(acoes_historico)
@@ -737,100 +622,47 @@ class PacientesScreen(QWidget):
         self.list_retornos.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.list_retornos.setCursor(Qt.CursorShape.PointingHandCursor)
         self.list_retornos.setToolTip("Duplo clique para abrir o retorno na Agenda")
-        self.list_retornos.setStyleSheet("""
-            QListWidget { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; color: #0f172a; }
-            QListWidget::item { padding: 5px 7px; border-bottom: 1px solid #e2e8f0; }
-            QListWidget::item:hover { background: #eff6ff; color: #0369a1; }
-            QListWidget::item:selected { background: #dbeafe; color: #0f172a; }
-        """)
         self.list_retornos.itemSelectionChanged.connect(self._atualizar_acoes_retorno)
         self.list_retornos.itemDoubleClicked.connect(self.abrir_retorno_na_agenda)
         right_layout.addWidget(self.list_retornos)
 
-        acoes_retornos = QVBoxLayout()
-        acoes_retornos.setSpacing(6)
+        acoes_retornos = QHBoxLayout()
+        acoes_retornos.setContentsMargins(0, 6, 0, 6)
+        acoes_retornos.setSpacing(8)
         self.btn_agendar_retorno = QPushButton("Agendar retorno")
-        self.btn_agendar_retorno.setMinimumHeight(32)
-        self.btn_agendar_retorno.setStyleSheet("QPushButton { background: #eff6ff; color: #0369a1; border: 1px solid #93c5fd; border-radius: 5px; padding: 6px 10px; font-weight: bold; } QPushButton:hover { background: #dbeafe; }")
+        self.btn_agendar_retorno.setFixedHeight(34)
+        definir_variante(self.btn_agendar_retorno, "secondary")
         self.btn_agendar_retorno.clicked.connect(self.agendar_retorno_selecionado)
-        acoes_retornos.addWidget(self.btn_agendar_retorno)
+        acoes_retornos.addWidget(self.btn_agendar_retorno, 1)
         self.btn_nao_retorno = QPushButton("Não retornará")
-        self.btn_nao_retorno.setMinimumHeight(32)
-        self.btn_nao_retorno.setStyleSheet("QPushButton { background: #fff7ed; color: #c2410c; border: 1px solid #fdba74; border-radius: 5px; padding: 6px 10px; font-weight: bold; } QPushButton:hover { background: #ffedd5; }")
+        self.btn_nao_retorno.setFixedHeight(34)
+        definir_variante(self.btn_nao_retorno, "danger")
         self.btn_nao_retorno.clicked.connect(lambda: self.alterar_status_retorno_selecionado("Não retornou"))
-        acoes_retornos.addWidget(self.btn_nao_retorno)
+        acoes_retornos.addWidget(self.btn_nao_retorno, 1)
         right_layout.addLayout(acoes_retornos)
         self._atualizar_acoes_retorno()
         
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
-        btn_layout.setContentsMargins(0, 2, 0, 0)
+        btn_layout.setContentsMargins(0, 8, 0, 0)
         
         self.btn_limpar = QPushButton("🔄 Limpar / Novo")
-        self.btn_limpar.setStyleSheet("""
-            QPushButton {
-                background-color: #f1f5f9;
-                color: #334155;
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                padding: 8px;
-                font-weight: bold;
-                min-height: 20px;
-            }
-            QPushButton:hover { background-color: #e2e8f0; }
-        """)
+        definir_variante(self.btn_limpar, "secondary")
         self.btn_limpar.clicked.connect(self.limpar_formulario)
         btn_layout.addWidget(self.btn_limpar)
         
         self.btn_salvar = QPushButton("💾 Salvar Registro")
-        self.btn_salvar.setStyleSheet("""
-            QPushButton {
-                background-color: #0284c7;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 8px;
-                font-weight: bold;
-                min-height: 20px;
-            }
-            QPushButton:hover { background-color: #0369a1; }
-        """)
+        definir_variante(self.btn_salvar, "primary")
         self.btn_salvar.clicked.connect(self.salvar_paciente)
         btn_layout.addWidget(self.btn_salvar)
         right_layout.addLayout(btn_layout)
 
         self.btn_excluir = QPushButton("❌ Excluir Paciente")
         self.btn_excluir.setVisible(False)
-        self.btn_excluir.setStyleSheet("""
-            QPushButton {
-                background-color: #fef2f2;
-                color: #dc2626;
-                border: 1px solid #fee2e2;
-                border-radius: 6px;
-                padding: 8px;
-                font-weight: bold;
-                min-height: 20px;
-                margin-top: 2px;
-            }
-            QPushButton:hover { background-color: #fee2e2; }
-        """)
+        definir_variante(self.btn_excluir, "danger")
         self.btn_excluir.clicked.connect(self.excluir_paciente)
         right_layout.addWidget(self.btn_excluir)
 
-        combobox_dropdown_style = """
-            QComboBox { background-color: white; color: #0f172a; }
-            QComboBox QAbstractItemView {
-                background-color: white;
-                color: #0f172a;
-                border: 1px solid #cbd5e1;
-                selection-background-color: #0284c7;
-                selection-color: white;
-            }
-        """
-        self.input_sexo.setStyleSheet(self.input_sexo.styleSheet() + combobox_dropdown_style)
-        self.input_pasta.setStyleSheet(self.input_pasta.styleSheet() + combobox_dropdown_style)
-        self.combo_filtro_pasta.setStyleSheet(self.combo_filtro_pasta.styleSheet() + combobox_dropdown_style)
-        
         main_layout.addWidget(self.right_container)
         self.carregar_pacientes_tabela()
         self._marcar_formulario_salvo()
@@ -840,7 +672,8 @@ class PacientesScreen(QWidget):
             self.input_nome.text(), self.input_tel.text(), self.input_nasc.date().toString("yyyy-MM-dd"),
             self.input_convenio.text(), self.input_pasta.currentText(), self.input_sexo.currentText(),
             self.input_cpf.text(), self.input_rg.text(), self.input_civil.text(), self.input_profissao.text(),
-            self.input_endereco.text(), self.input_qp.toPlainText(), self.id_em_edicao,
+            self.input_endereco.text(), self.input_qp.toPlainText(),
+            self.check_lembretes_whatsapp.isChecked(), self.id_em_edicao,
         )
 
     def abrir_importador_pacientes(self):
@@ -895,8 +728,15 @@ class PacientesScreen(QWidget):
         if len(numero) <= 11: 
             numero = "55" + numero
         
-        texto_padrao = urllib.parse.quote("Olá! Entramos em contato a partir do consultório médico.")
-        webbrowser.open(f"https://web.whatsapp.com/send?phone={numero}&text={texto_padrao}")
+        modelo = self.db.obter_configuracao(
+            "whatsapp_mensagem_manual", MENSAGEM_WHATSAPP_MANUAL_PADRAO
+        )
+        profissional = self.db.obter_nome_profissional() or "a equipe da clínica"
+        mensagem = str(modelo or MENSAGEM_WHATSAPP_MANUAL_PADRAO)
+        mensagem = mensagem.replace("{paciente}", self.input_nome.text().strip() or "")
+        mensagem = mensagem.replace("{profissional}", profissional)
+        texto = urllib.parse.quote(mensagem)
+        webbrowser.open(f"https://web.whatsapp.com/send?phone={numero}&text={texto}")
 
     def carregar_pacientes_tabela(self, lista_customizada=None):
         self.tabela.setRowCount(0)
@@ -989,7 +829,7 @@ class PacientesScreen(QWidget):
 
         try:
             resposta = self.db.supabase.table("pacientes")\
-                .select("nome, telefone, nascimento, convenio, pasta, sexo, cpf, rg, estado_civil, profissao, endereco, queixa")\
+                .select("nome, telefone, nascimento, convenio, pasta, sexo, cpf, rg, estado_civil, profissao, endereco, queixa, lembretes_whatsapp_ativos")\
                 .eq("id", self.id_em_edicao)\
                 .eq("consultorio_id", self.db.consultorio_id)\
                 .maybe_single()\
@@ -1019,6 +859,7 @@ class PacientesScreen(QWidget):
                 self.input_profissao.setText(p.get("profissao") or "")
                 self.input_endereco.setText(p.get("endereco") or "")
                 self.input_qp.setPlainText(p.get("queixa") or "")
+                self.check_lembretes_whatsapp.setChecked(bool(p.get("lembretes_whatsapp_ativos")))
                 
                 self.btn_excluir.setVisible(True)
                 self._marcar_formulario_salvo()
@@ -1030,11 +871,12 @@ class PacientesScreen(QWidget):
 
     def carregar_historico_fichas_paciente(self, p_id):
         self.list_historico_fichas.clear()
+        self.btn_ver_anexos_ficha.setEnabled(False)
         if not self.db.supabase:
             return
         try:
             resposta = self.db.supabase.table("fichas_preenchidas")\
-                .select("id, modelo_nome, data_atendimento, dados_respostas")\
+                .select("id, modelo_nome, data_atendimento, dados_respostas, anexos")\
                 .eq("paciente_id", p_id)\
                 .eq("consultorio_id", self.db.consultorio_id)\
                 .is_("deleted_at", "null")\
@@ -1043,12 +885,86 @@ class PacientesScreen(QWidget):
             
             if resposta.data:
                 for f in resposta.data:
-                    w_item = QListWidgetItem(f"📄 {f['modelo_nome']} ({f['data_atendimento']})")
-                    f_tuple = (f["id"], f["modelo_nome"], f["data_atendimento"], f["dados_respostas"])
+                    anexos = f.get("anexos") or []
+                    if isinstance(anexos, str):
+                        try:
+                            anexos = json.loads(anexos)
+                        except (TypeError, json.JSONDecodeError):
+                            anexos = []
+                    total_anexos = len(anexos) if isinstance(anexos, list) else 0
+                    sufixo_anexos = f" · {total_anexos} anexo(s)" if total_anexos else ""
+                    w_item = QListWidgetItem(f"📄 {f['modelo_nome']} ({f['data_atendimento']}){sufixo_anexos}")
+                    f_tuple = (f["id"], f["modelo_nome"], f["data_atendimento"], f["dados_respostas"], anexos)
                     w_item.setData(Qt.UserRole, f_tuple)
                     self.list_historico_fichas.addItem(w_item)
+            self._atualizar_acao_anexos_ficha()
         except Exception as e:
             print(f"Erro ao buscar histórico de fichas no banco: {e}")
+
+    def _atualizar_acao_anexos_ficha(self):
+        item = self.list_historico_fichas.currentItem()
+        dados = item.data(Qt.UserRole) if item else None
+        anexos = dados[4] if dados and len(dados) > 4 else []
+        self.btn_ver_anexos_ficha.setEnabled(bool(anexos))
+
+    def ver_anexos_ficha_selecionada(self):
+        item = self.list_historico_fichas.currentItem()
+        dados = item.data(Qt.UserRole) if item else None
+        anexos = dados[4] if dados and len(dados) > 4 else []
+        if not anexos:
+            self.mostrar_alerta_seguro("warning", "Sem anexos", "A ficha selecionada não possui fotos ou PDFs anexados.")
+            return
+
+        dialogo = QDialog(self)
+        dialogo.setWindowTitle("Anexos da ficha")
+        dialogo.setMinimumWidth(430)
+        layout = QVBoxLayout(dialogo)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.addWidget(QLabel("Selecione um arquivo para abrir:"))
+        lista = QListWidget()
+        for anexo in anexos:
+            if isinstance(anexo, dict):
+                item_anexo = QListWidgetItem(str(anexo.get("nome") or "Anexo"))
+                item_anexo.setData(Qt.ItemDataRole.UserRole, anexo)
+                lista.addItem(item_anexo)
+        layout.addWidget(lista)
+        botoes = QHBoxLayout()
+        botoes.addStretch()
+        cancelar = QPushButton("Fechar")
+        abrir = QPushButton("Abrir anexo")
+        definir_variante(abrir, "primary")
+        cancelar.clicked.connect(dialogo.accept)
+
+        def abrir_selecionado():
+            selecionado = lista.currentItem()
+            if not selecionado:
+                QMessageBox.warning(dialogo, "Selecione um anexo", "Clique em um arquivo da lista primeiro.")
+                return
+            if self._abrir_anexo_remoto(selecionado.data(Qt.ItemDataRole.UserRole)):
+                dialogo.accept()
+
+        abrir.clicked.connect(abrir_selecionado)
+        lista.itemDoubleClicked.connect(lambda item: abrir_selecionado())
+        botoes.addWidget(cancelar)
+        botoes.addWidget(abrir)
+        layout.addLayout(botoes)
+        dialogo.exec()
+
+    def _abrir_anexo_remoto(self, anexo):
+        caminho = str((anexo or {}).get("caminho") or "")
+        if not caminho or not self.db.supabase:
+            return False
+        try:
+            resposta = self.db.supabase.storage.from_(NOME_BUCKET_ANEXOS).create_signed_url(caminho, 120)
+            url = (resposta.get("signedURL") or resposta.get("signed_url")) if isinstance(resposta, dict) else ""
+            if not url:
+                raise RuntimeError("link temporário não disponível")
+            webbrowser.open(str(url))
+            return True
+        except Exception as erro:
+            registrar_falha("abrir anexo da ficha", erro)
+            self.mostrar_alerta_seguro("error", "Anexo indisponível", "Não foi possível abrir este arquivo agora. Tente novamente.")
+            return False
 
     def carregar_retornos_paciente(self, paciente_id):
         self.list_retornos.clear()
@@ -1126,19 +1042,40 @@ class PacientesScreen(QWidget):
     def _escolher_data_retorno(self):
         dialogo = QDialog(self)
         dialogo.setWindowTitle("Agendar retorno")
-        dialogo.setMinimumWidth(350)
+        dialogo.setMinimumWidth(390)
         layout = QVBoxLayout(dialogo)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
         layout.addWidget(QLabel("Escolha a data prevista para o retorno:"))
+
+        # Mantém a digitação disponível e também oferece uma visualização clara
+        # do mês para selecionar a data sem precisar decorá-la.
         campo_data = QDateEdit()
         campo_data.setCalendarPopup(True)
         campo_data.setDisplayFormat("dd/MM/yyyy")
-        campo_data.setDate(QDate.currentDate().addDays(30))
+        data_inicial = QDate.currentDate().addDays(30)
+        campo_data.setDate(data_inicial)
         layout.addWidget(campo_data)
+
+        calendario = QCalendarWidget()
+        calendario.setGridVisible(True)
+        calendario.setSelectedDate(data_inicial)
+        calendario.setStyleSheet("""
+            QCalendarWidget QWidget { background: #ffffff; color: #17233a; }
+            QCalendarWidget QToolButton { color: #075985; background: #edf7ff; border: 1px solid #b8d8ef; border-radius: 5px; padding: 5px; font-weight: 700; }
+            QCalendarWidget QMenu { background: #ffffff; color: #17233a; }
+            QCalendarWidget QSpinBox { background: #ffffff; color: #17233a; border: none; }
+            QCalendarWidget QAbstractItemView:enabled { color: #17233a; selection-background-color: #0284c7; selection-color: #ffffff; }
+        """)
+        campo_data.dateChanged.connect(calendario.setSelectedDate)
+        calendario.selectionChanged.connect(lambda: campo_data.setDate(calendario.selectedDate()))
+        layout.addWidget(calendario)
+
         botoes = QHBoxLayout()
         botoes.addStretch()
         cancelar = QPushButton("Cancelar")
-        continuar = QPushButton("Abrir Agenda")
-        continuar.setStyleSheet("QPushButton { background: #0284c7; color: white; border: none; border-radius: 6px; padding: 8px 14px; font-weight: bold; } QPushButton:hover { background: #0369a1; }")
+        continuar = QPushButton("Continuar para a Agenda")
+        definir_variante(continuar, "primary")
         cancelar.clicked.connect(dialogo.reject)
         continuar.clicked.connect(dialogo.accept)
         botoes.addWidget(cancelar)
@@ -1319,7 +1256,8 @@ class PacientesScreen(QWidget):
                 "estado_civil": civil,
                 "profissao": prof,
                 "endereco": end,
-                "queixa": queixa
+                "queixa": queixa,
+                "lembretes_whatsapp_ativos": self.check_lembretes_whatsapp.isChecked(),
             }
             
             if self.id_em_edicao == -1:
@@ -1396,7 +1334,7 @@ class PacientesScreen(QWidget):
         botoes.addStretch()
         btn_cancelar = QPushButton("Cancelar")
         btn_confirmar = QPushButton("Criar retorno")
-        btn_confirmar.setStyleSheet("QPushButton { background: #0284c7; color: white; border: none; border-radius: 6px; padding: 8px 14px; font-weight: bold; } QPushButton:hover { background: #0369a1; }")
+        definir_variante(btn_confirmar, "primary")
         btn_cancelar.clicked.connect(dialogo.reject)
         btn_confirmar.clicked.connect(dialogo.accept)
         botoes.addWidget(btn_cancelar)
@@ -1499,6 +1437,7 @@ class PacientesScreen(QWidget):
         self.input_profissao.clear()
         self.input_endereco.clear()
         self.input_qp.clear()
+        self.check_lembretes_whatsapp.setChecked(False)
         self.list_historico_fichas.clear()
         self.list_retornos.clear()
         self.tabela.clearSelection()
