@@ -4,7 +4,8 @@ import urllib.parse
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                                QLineEdit, QPushButton, QComboBox, QFrame, 
                                QMessageBox, QCalendarWidget, QScrollArea,
-                               QHeaderView, QTableView, QCheckBox, QCompleter, QDialog)
+                               QHeaderView, QTableView, QCheckBox, QCompleter, QDialog,
+                               QInputDialog, QSizePolicy)
 from PySide6.QtCore import Qt, QDate, QTime, QDateTime, QPoint
 from ui.design_system import definir_variante
 from utils.operacao_segura import mensagem_erro_usuario, registrar_falha
@@ -16,6 +17,12 @@ MENSAGEM_LEMBRETE_CONSULTA_PADRAO = (
 )
 
 class AgendaScreen(QWidget):
+    TIPOS_CONSULTA_PADRAO = [
+        "Primeira Consulta / Avaliação",
+        "Retorno",
+        "Procedimento Clínico",
+        "Telemedicina",
+    ]
     STATUS_CONSULTA = [
         "🕒 Agendado", "✅ Confirmado", "🏥 Em Atendimento",
         "✅ Realizada", "🚫 Cancelada", "❌ Faltou",
@@ -206,8 +213,19 @@ class AgendaScreen(QWidget):
         
         form_layout.addWidget(QLabel("Procedimento / Tipo de Consulta:"))
         self.input_procedimento = QComboBox()
-        self.input_procedimento.addItems(["Primeira Consulta / Avaliação", "Retorno", "Procedimento Clínico", "Telemedicina"])
-        form_layout.addWidget(self.input_procedimento)
+        self._popular_tipos_consulta()
+        procedimento_layout = QHBoxLayout()
+        procedimento_layout.setContentsMargins(0, 0, 0, 0)
+        procedimento_layout.setSpacing(8)
+        procedimento_layout.addWidget(self.input_procedimento, stretch=1)
+        self.btn_adicionar_tipo_consulta = QPushButton("+")
+        self.btn_adicionar_tipo_consulta.setToolTip("Adicionar tipo de consulta personalizado")
+        self.btn_adicionar_tipo_consulta.setAccessibleName("Adicionar tipo de consulta")
+        self.btn_adicionar_tipo_consulta.setFixedSize(36, 36)
+        definir_variante(self.btn_adicionar_tipo_consulta, "secondary")
+        self.btn_adicionar_tipo_consulta.clicked.connect(self.adicionar_tipo_consulta_personalizado)
+        procedimento_layout.addWidget(self.btn_adicionar_tipo_consulta)
+        form_layout.addLayout(procedimento_layout)
         
         form_layout.addWidget(QLabel("Status Inicial:"))
         self.input_status = QComboBox()
@@ -236,6 +254,72 @@ class AgendaScreen(QWidget):
         self.renderizar_timeline_calendario()
         self._conectar_monitoramento_formulario()
         self._marcar_formulario_salvo()
+
+    def _tipos_consulta_personalizados(self):
+        """Retorna os tipos extras salvos para a clínica atual."""
+        try:
+            valor = self.db_gerenciador.obter_configuracao(
+                "agenda_tipos_consulta_personalizados", "[]"
+            )
+            tipos = json.loads(valor or "[]")
+            if not isinstance(tipos, list):
+                return []
+            return [str(tipo).strip() for tipo in tipos if str(tipo).strip()]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+
+    def _popular_tipos_consulta(self, selecionado=None):
+        """Atualiza o seletor sem perder o tipo selecionado pelo usuário."""
+        if not hasattr(self, "input_procedimento"):
+            return
+        tipo_atual = selecionado or self.input_procedimento.currentText()
+        tipos = list(self.TIPOS_CONSULTA_PADRAO)
+        chaves = {tipo.casefold() for tipo in tipos}
+        for tipo in self._tipos_consulta_personalizados():
+            if tipo.casefold() not in chaves:
+                tipos.append(tipo)
+                chaves.add(tipo.casefold())
+        self.input_procedimento.blockSignals(True)
+        self.input_procedimento.clear()
+        self.input_procedimento.addItems(tipos)
+        indice = self.input_procedimento.findText(tipo_atual)
+        self.input_procedimento.setCurrentIndex(indice if indice >= 0 else 0)
+        self.input_procedimento.blockSignals(False)
+
+    def adicionar_tipo_consulta_personalizado(self):
+        """Permite que a clínica acrescente um procedimento ao seletor da Agenda."""
+        tipo, confirmou = QInputDialog.getText(
+            self,
+            "Novo tipo de consulta",
+            "Nome do tipo de consulta:",
+        )
+        tipo = tipo.strip()
+        if not confirmou or not tipo:
+            return
+
+        existentes = self._tipos_consulta_personalizados()
+        todos = [*self.TIPOS_CONSULTA_PADRAO, *existentes]
+        if any(tipo.casefold() == existente.casefold() for existente in todos):
+            QMessageBox.information(
+                self,
+                "Tipo já cadastrado",
+                "Esse tipo de consulta já está disponível na lista.",
+            )
+            self._popular_tipos_consulta(tipo)
+            return
+
+        try:
+            self.db_gerenciador.salvar_configuracao(
+                "agenda_tipos_consulta_personalizados",
+                json.dumps([*existentes, tipo], ensure_ascii=False),
+            )
+            self._popular_tipos_consulta(tipo)
+        except Exception:
+            QMessageBox.warning(
+                self,
+                "Não foi possível salvar",
+                "Não foi possível adicionar o tipo de consulta agora. Tente novamente.",
+            )
 
     def carregar_lista_pacientes_combobox(self):
         """Busca em tempo real a listagem de nomes cadastrados no Supabase para sugestões."""
@@ -513,16 +597,23 @@ class AgendaScreen(QWidget):
                     card_info_layout.addLayout(vbox_detalhes, stretch=1)
                     
                     btn_remover = QPushButton("✕")
-                    self.adicionar_acoes_rapidas_consulta(card_info_layout, hora, status_txt)
+                    area_acoes = QWidget()
+                    area_acoes_layout = QHBoxLayout(area_acoes)
+                    area_acoes_layout.setContentsMargins(0, 0, 0, 0)
+                    area_acoes_layout.setSpacing(8)
+                    self.adicionar_acoes_rapidas_consulta(area_acoes_layout, hora, status_txt)
 
                     if not any(termo in status_txt for termo in ("Realizada", "Cancelada", "Faltou")):
                         btn_lembrete = QPushButton("Enviar lembrete")
                         btn_lembrete.setToolTip("Abrir o WhatsApp com o lembrete desta consulta preenchido")
+                        btn_lembrete.setFixedHeight(34)
+                        btn_lembrete.setMinimumWidth(124)
+                        btn_lembrete.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                         definir_variante(btn_lembrete, "secondary")
                         btn_lembrete.clicked.connect(
                             lambda checked=False, h=hora: self.enviar_lembrete_whatsapp(h)
                         )
-                        card_info_layout.addWidget(btn_lembrete)
+                        area_acoes_layout.addWidget(btn_lembrete)
 
                     if "Realizada" in status_txt:
                         btn_ficha = QPushButton("Abrir ficha")
@@ -532,12 +623,13 @@ class AgendaScreen(QWidget):
                             "QPushButton:hover { background: #0369a1; }"
                         )
                         btn_ficha.clicked.connect(lambda checked=False, h=hora: self.abrir_ficha_da_consulta(h))
-                        btn_ficha.setMaximumWidth(78)
-                        card_info_layout.addWidget(btn_ficha)
+                        btn_ficha.setFixedSize(88, 34)
+                        area_acoes_layout.addWidget(btn_ficha)
 
                     btn_remover.setFixedSize(24, 24)
                     btn_remover.setStyleSheet("QPushButton { background: transparent; color: #94a3b8; border: none; font-weight: bold; font-size: 14px; } QPushButton:hover { color: #ef4444; }")
                     btn_remover.clicked.connect(lambda checked=False, h=hora: self.remover_agendamento(h))
+                    card_info_layout.addWidget(area_acoes, alignment=Qt.AlignmentFlag.AlignVCenter)
                     card_info_layout.addWidget(btn_remover)
                     
                     bloco_layout.addWidget(card_info, stretch=1)
@@ -1036,13 +1128,36 @@ class AgendaScreen(QWidget):
         acoes = QWidget()
         acoes_layout = QHBoxLayout(acoes)
         acoes_layout.setContentsMargins(0, 0, 0, 0)
-        acoes_layout.setSpacing(6)
+        acoes_layout.setSpacing(8)
 
         def adicionar_botao(texto, variante, novo_status, dica):
             botao = QPushButton(texto)
             botao.setToolTip(dica)
-            botao.setFixedHeight(30)
+            botao.setFixedHeight(34)
+            botao.setMinimumWidth(92)
+            botao.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             definir_variante(botao, variante)
+            # O cartão da consulta possui estilo próprio. Declarar também a
+            # aparência local da ação evita que o texto branco do botão
+            # primário fique invisível quando o Qt propaga esse estilo.
+            estilos = {
+                "primary": (
+                    "QPushButton { background: #0284c7; color: #ffffff; border: 1px solid #0284c7; "
+                    "border-radius: 7px; font-weight: 700; padding: 5px 10px; } "
+                    "QPushButton:hover { background: #0369a1; border-color: #0369a1; }"
+                ),
+                "secondary": (
+                    "QPushButton { background: #e8f4ff; color: #075985; border: 1px solid #9acdf1; "
+                    "border-radius: 7px; font-weight: 700; padding: 5px 10px; } "
+                    "QPushButton:hover { background: #d7edff; border-color: #58ace3; }"
+                ),
+                "danger": (
+                    "QPushButton { background: #fff1f2; color: #be123c; border: 1px solid #fda4af; "
+                    "border-radius: 7px; font-weight: 700; padding: 5px 10px; } "
+                    "QPushButton:hover { background: #ffe4e6; border-color: #fb7185; }"
+                ),
+            }
+            botao.setStyleSheet(estilos[variante])
             botao.clicked.connect(
                 lambda checked=False, h=hora, s=novo_status: self.atualizar_status_agendamento(h, s)
             )
@@ -1052,7 +1167,9 @@ class AgendaScreen(QWidget):
             adicionar_botao("Confirmar", "primary", "✅ Confirmado", "Registrar que o paciente confirmou presença")
             btn_reagendar = QPushButton("Reagendar")
             btn_reagendar.setToolTip("Escolher uma nova data e horário sem redigitar a consulta")
-            btn_reagendar.setFixedHeight(30)
+            btn_reagendar.setFixedHeight(34)
+            btn_reagendar.setMinimumWidth(98)
+            btn_reagendar.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             definir_variante(btn_reagendar, "secondary")
             btn_reagendar.clicked.connect(lambda checked=False, h=hora: self.abrir_reagendamento_guiado(h))
             acoes_layout.addWidget(btn_reagendar)
@@ -1061,7 +1178,9 @@ class AgendaScreen(QWidget):
             adicionar_botao("Iniciar", "secondary", "🏥 Em Atendimento", "Marcar que o atendimento começou")
             btn_reagendar = QPushButton("Reagendar")
             btn_reagendar.setToolTip("Escolher uma nova data e horário sem redigitar a consulta")
-            btn_reagendar.setFixedHeight(30)
+            btn_reagendar.setFixedHeight(34)
+            btn_reagendar.setMinimumWidth(98)
+            btn_reagendar.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             definir_variante(btn_reagendar, "secondary")
             btn_reagendar.clicked.connect(lambda checked=False, h=hora: self.abrir_reagendamento_guiado(h))
             acoes_layout.addWidget(btn_reagendar)
@@ -1433,14 +1552,28 @@ class AgendaScreen(QWidget):
             return
         if dados.get("status") == novo_status:
             return
-        status_anterior = dados["status"]
-        dados["status"] = novo_status
-        if not self.salvar_agendamento_no_db(str_data, hora, dados):
-            dados["status"] = status_anterior
+        if not self._salvar_status_agendamento_no_db(str_data, hora, novo_status):
             QMessageBox.warning(self, "Status não atualizado", "Não foi possível salvar o novo status da consulta.")
             return
+        dados["status"] = novo_status
         self._sincronizar_retorno_da_consulta(dados, novo_status)
         self.renderizar_timeline_calendario()
+
+    def _salvar_status_agendamento_no_db(self, data, hora, novo_status):
+        """Atualiza apenas a coluna modificada pela ação rápida."""
+        if not self.db_gerenciador.supabase or self.db_gerenciador.consultorio_id is None:
+            return False
+        try:
+            self.db_gerenciador.supabase.table("agenda").update({
+                "status": novo_status,
+            }).eq("consultorio_id", int(self.db_gerenciador.consultorio_id)).eq(
+                "data", data
+            ).eq("horario", hora).execute()
+            return True
+        except Exception as erro:
+            registrar_falha("atualizar status do agendamento", erro)
+            self._ultimo_erro_agenda = type(erro).__name__
+            return False
 
     def _sincronizar_retorno_da_consulta(self, dados, status_consulta):
         """Mantem o retorno vinculado coerente com o destino da consulta."""

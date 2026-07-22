@@ -176,6 +176,25 @@ class EquipeScreen(QWidget):
         return container
 
     def carregar_dados(self):
+        # A própria Edge Function também valida o plano. Este aviso local evita
+        # que uma recusa esperada do servidor pareça um erro de carregamento.
+        if not self.db.possui_recurso("equipe"):
+            self.lbl_limite.setText("Este consultório está no plano Solo. A gestão de equipe fica disponível no plano Equipe.")
+            self.lbl_limite.setStyleSheet("color: #b45309; font-weight: 600;")
+            self.tabela_membros.setRowCount(0)
+            self.tabela_convites.setRowCount(0)
+            self.input_nome.setEnabled(False)
+            self.input_email.setEnabled(False)
+            self.combo_papel.setEnabled(False)
+            self.btn_convidar.setEnabled(False)
+            self.btn_convidar.setToolTip("Disponível no plano Equipe")
+            return
+
+        self.input_nome.setEnabled(True)
+        self.input_email.setEnabled(True)
+        self.combo_papel.setEnabled(True)
+        self.btn_convidar.setEnabled(True)
+        self.btn_convidar.setToolTip("")
         dados = self.db.listar_equipe()
         if not dados:
             self.lbl_limite.setText("Não foi possível carregar a equipe. Tente novamente.")

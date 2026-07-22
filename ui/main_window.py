@@ -8,6 +8,8 @@ from ui.screens.home import HomeScreen
 from ui.screens.pacientes import PacientesScreen
 from ui.screens.agenda import AgendaScreen 
 from ui.screens.configuracoes import ConfiguracoesScreen
+from ui.screens.financeiro import FinanceiroScreen
+from ui.screens.equipe import EquipeScreen
 
 try:
     from ui.screens.fichas import FichasScreen
@@ -80,9 +82,14 @@ class MainWindow(QMainWindow):
         self.btn_pacientes = QPushButton(" 👤 Pacientes")
         self.btn_agenda = QPushButton(" 📅 Agenda de Consultas")
         self.btn_fichas = QPushButton(" 📝 Fichas Clínicas")
+        self.btn_financeiro = QPushButton(" 💰 Financeiro")
+        self.btn_equipe = QPushButton(" 👥 Equipe")
         self.btn_config = QPushButton(" ⚙️ Configurações")
         
-        self.botoes_menu = [self.btn_home, self.btn_pacientes, self.btn_agenda, self.btn_fichas, self.btn_config]
+        self.botoes_menu = [
+            self.btn_home, self.btn_pacientes, self.btn_agenda, self.btn_fichas,
+            self.btn_financeiro, self.btn_equipe, self.btn_config,
+        ]
         
         for btn in self.botoes_menu:
             sidebar_layout.addWidget(btn)
@@ -106,11 +113,15 @@ class MainWindow(QMainWindow):
         self.screen_home = HomeScreen(
             self,
             on_novo_paciente_click=self.navegar_para_novo_paciente,
-            on_pasta_click=self.filtrar_pacientes_por_pasta
+            on_pasta_click=self.filtrar_pacientes_por_pasta,
+            on_agendar_retorno_click=self.agendar_retorno_da_home,
+            on_consulta_click=self.abrir_consulta_da_home,
         )
         self.screen_pacientes = PacientesScreen(self.db)
         self.screen_agenda = AgendaScreen(self.db)
-        self.screen_fichas = FichasScreen() if FichasScreen is not None else QWidget()
+        self.screen_fichas = FichasScreen(self.db) if FichasScreen is not None else QWidget()
+        self.screen_financeiro = FinanceiroScreen(self.db)
+        self.screen_equipe = EquipeScreen(self.db)
         # ConfiguracoesScreen também precisa da JANELA PRINCIPAL (self), não do banco,
         # para conseguir chamar self.screen_home.atualizar_saudacao_dinamica() ao salvar.
         self.screen_config = ConfiguracoesScreen(window_principal=self)
@@ -119,7 +130,9 @@ class MainWindow(QMainWindow):
         self.painel_telas.addWidget(self.screen_pacientes) # Índice 1
         self.painel_telas.addWidget(self.screen_agenda)    # Índice 2
         self.painel_telas.addWidget(self.screen_fichas)    # Índice 3
-        self.painel_telas.addWidget(self.screen_config)    # Índice 4
+        self.painel_telas.addWidget(self.screen_financeiro) # Índice 4
+        self.painel_telas.addWidget(self.screen_equipe)     # Índice 5
+        self.painel_telas.addWidget(self.screen_config)     # Índice 6
         
         # Sincroniza a lista de pastas já carregada com o combobox de Pacientes
         # assim que a tela é criada, sem precisar esperar o usuário trocar de aba.
@@ -134,7 +147,9 @@ class MainWindow(QMainWindow):
         self.btn_pacientes.clicked.connect(lambda: self.mudar_tela(1, self.btn_pacientes))
         self.btn_agenda.clicked.connect(lambda: self.mudar_tela(2, self.btn_agenda))
         self.btn_fichas.clicked.connect(lambda: self.mudar_tela(3, self.btn_fichas))
-        self.btn_config.clicked.connect(lambda: self.mudar_tela(4, self.btn_config))
+        self.btn_financeiro.clicked.connect(lambda: self.mudar_tela(4, self.btn_financeiro))
+        self.btn_equipe.clicked.connect(lambda: self.mudar_tela(5, self.btn_equipe))
+        self.btn_config.clicked.connect(lambda: self.mudar_tela(6, self.btn_config))
         
         # Define a tela padrão inicial (Home)
         self.mudar_tela(0, self.btn_home)
@@ -174,6 +189,12 @@ class MainWindow(QMainWindow):
             if hasattr(self.screen_fichas, 'carregar_modelos_iniciais_combo'):
                 self.screen_fichas.carregar_modelos_iniciais_combo()
         elif indice == 4:
+            if hasattr(self.screen_financeiro, 'carregar_dados'):
+                self.screen_financeiro.carregar_dados()
+        elif indice == 5:
+            if hasattr(self.screen_equipe, 'carregar_dados'):
+                self.screen_equipe.carregar_dados()
+        elif indice == 6:
             if hasattr(self.screen_config, 'carregar_dados_configurados'):
                 self.screen_config.carregar_dados_configurados()
 
@@ -195,6 +216,18 @@ class MainWindow(QMainWindow):
         self.mudar_tela(1, self.btn_pacientes)
         if hasattr(self.screen_pacientes, 'filtrar_por_pasta_externo'):
             self.screen_pacientes.filtrar_por_pasta_externo(nome_pasta)
+
+    def abrir_consulta_da_home(self, consulta):
+        """Abre a Agenda já posicionada na consulta escolhida no painel."""
+        self.mudar_tela(2, self.btn_agenda)
+        if hasattr(self.screen_agenda, "abrir_consulta_por_data_hora"):
+            self.screen_agenda.abrir_consulta_por_data_hora(consulta)
+
+    def agendar_retorno_da_home(self, retorno):
+        """Leva um retorno pendente para o formulário da Agenda."""
+        self.mudar_tela(2, self.btn_agenda)
+        if hasattr(self.screen_agenda, "preencher_agendamento_retorno"):
+            self.screen_agenda.preencher_agendamento_retorno(retorno)
 
     def init_db_estruturas(self):
         """Cria as tabelas auxiliares necessárias se elas não existirem no Supabase."""

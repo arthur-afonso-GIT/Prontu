@@ -378,6 +378,9 @@ class PacientesScreen(QWidget):
         
         # Recebe a conexão única já configurada e autenticada a partir da MainWindow
         self.db = database_instancia
+        self.automacao_whatsapp_disponivel = bool(
+            self.db and self.db.possui_recurso("whatsapp_automatico")
+        )
         
         self.id_em_edicao = -1
         self.row_em_edicao = -1
@@ -501,6 +504,7 @@ class PacientesScreen(QWidget):
         self.check_lembretes_whatsapp.setToolTip(
             "Marque somente após a autorização do paciente. A automação usará esta preferência."
         )
+        self.check_lembretes_whatsapp.setVisible(self.automacao_whatsapp_disponivel)
         right_layout.addWidget(self.check_lembretes_whatsapp)
         
         row_nasc_sexo = QHBoxLayout()
@@ -790,29 +794,43 @@ class PacientesScreen(QWidget):
 
             paciente_id = row_data[0]
             nome_paciente = str(row_data[1] or "")
-            btn_excluir_linha = QPushButton("×")
+            btn_excluir_linha = QPushButton("X")
             btn_excluir_linha.setToolTip(f"Excluir {nome_paciente}")
-            btn_excluir_linha.setFixedSize(30, 30)
+            btn_excluir_linha.setAccessibleName(f"Excluir paciente {nome_paciente}")
+            btn_excluir_linha.setFixedSize(32, 28)
+            btn_excluir_linha.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_excluir_linha.setStyleSheet("""
                 QPushButton {
                     color: #dc2626;
                     background-color: #fef2f2;
                     border: 1px solid #fecaca;
                     border-radius: 6px;
-                    font-size: 20px;
-                    font-weight: bold;
+                    padding: 0px;
+                    margin: 0px;
+                    min-width: 32px;
+                    max-width: 32px;
+                    min-height: 28px;
+                    max-height: 28px;
+                    font-size: 13px;
+                    font-weight: 700;
                 }
-                QPushButton:hover { background-color: #fee2e2; border-color: #f87171; }
+                QPushButton:hover {
+                    color: #b91c1c;
+                    background-color: #fee2e2;
+                    border-color: #f87171;
+                }
+                QPushButton:pressed { background-color: #fecaca; }
             """)
             btn_excluir_linha.clicked.connect(
                 lambda _, pid=paciente_id, nome=nome_paciente: self.excluir_paciente_por_id(pid, nome)
             )
             celula_exclusao = QWidget()
             layout_celula = QHBoxLayout(celula_exclusao)
-            layout_celula.setContentsMargins(0, 0, 0, 0)
+            layout_celula.setContentsMargins(4, 4, 4, 4)
+            layout_celula.setSpacing(0)
             layout_celula.addWidget(btn_excluir_linha, alignment=Qt.AlignmentFlag.AlignCenter)
             self.tabela.setCellWidget(row_idx, 5, celula_exclusao)
-            self.tabela.setRowHeight(row_idx, 38)
+            self.tabela.setRowHeight(row_idx, 40)
         self.tabela.setUpdatesEnabled(True)
 
     def carregar_paciente_selecionado(self):
@@ -859,7 +877,10 @@ class PacientesScreen(QWidget):
                 self.input_profissao.setText(p.get("profissao") or "")
                 self.input_endereco.setText(p.get("endereco") or "")
                 self.input_qp.setPlainText(p.get("queixa") or "")
-                self.check_lembretes_whatsapp.setChecked(bool(p.get("lembretes_whatsapp_ativos")))
+                self.check_lembretes_whatsapp.setChecked(
+                    self.automacao_whatsapp_disponivel
+                    and bool(p.get("lembretes_whatsapp_ativos"))
+                )
                 
                 self.btn_excluir.setVisible(True)
                 self._marcar_formulario_salvo()
@@ -1257,7 +1278,10 @@ class PacientesScreen(QWidget):
                 "profissao": prof,
                 "endereco": end,
                 "queixa": queixa,
-                "lembretes_whatsapp_ativos": self.check_lembretes_whatsapp.isChecked(),
+                "lembretes_whatsapp_ativos": (
+                    self.automacao_whatsapp_disponivel
+                    and self.check_lembretes_whatsapp.isChecked()
+                ),
             }
             
             if self.id_em_edicao == -1:

@@ -25,6 +25,7 @@ class SessionManager:
         self.storage = SecureStorage()
         self.device_id = self.storage.get_or_create_device_id()
         self._session: dict[str, Any] | None = None
+        self._persist_session = False
 
     @property
     def is_authenticated(self) -> bool:
@@ -54,10 +55,12 @@ class SessionManager:
             if refreshed:
                 self._session = refreshed
                 self.storage.save_session(refreshed)
+                self._persist_session = True
                 return True
             self.storage.clear_session()
             return False
         self._session = data
+        self._persist_session = True
         return True
 
     def activate_with_key(self, chave: str, device_name: str | None = None) -> dict[str, Any]:
@@ -100,8 +103,15 @@ class SessionManager:
             "consultorio_id": payload.get("consultorio_id"),
             "nome_clinica": payload.get("nome_clinica"),
             "auth_user_id": payload.get("auth_user_id"),
+            "papel": payload.get("papel") or "proprietario",
+            "plano": payload.get("plano") or "solo",
+            "status_assinatura": payload.get("status_assinatura") or "ativa",
+            "max_usuarios": payload.get("max_usuarios") or 1,
+            "expira_em": payload.get("expira_em"),
+            "recursos_extras": payload.get("recursos_extras") or [],
         }
         self._session = session
+        self._persist_session = True
         self.storage.save_session(session)
         self.storage.mark_legacy_requires_revalidation()
         return session
@@ -115,11 +125,13 @@ class SessionManager:
         if not refreshed:
             raise SessionExpiredError("Sessão expirada. Revalide a chave de acesso.")
         self._session = refreshed
-        self.storage.save_session(refreshed)
+        if self._persist_session:
+            self.storage.save_session(refreshed)
         return True
 
     def logout(self) -> None:
         self._session = None
+        self._persist_session = False
         self.storage.clear_session()
 
     def _refresh_tokens(self, session: dict[str, Any]) -> dict[str, Any] | None:

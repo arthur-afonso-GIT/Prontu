@@ -97,6 +97,169 @@ class MensagensWhatsAppDialog(QDialog):
         self.accept()
 
 
+class AcompanhamentoLembretesDialog(QDialog):
+    """Mostra o resultado da automação sem expor credenciais do WhatsApp."""
+
+    NOMES_STATUS = {
+        "pendente": "Aguardando envio",
+        "processando": "Em processamento",
+        "enviado": "Aguardando confirmação",
+        "falhou": "Falha no envio",
+        "cancelado": "Cancelado",
+        "ignorado": "Não enviado",
+    }
+    NOMES_META_STATUS = {
+        "accepted": "Aceito pela Meta",
+        "sent": "Enviado ao WhatsApp",
+        "delivered": "Entregue",
+        "read": "Lido",
+        "failed": "Não entregue",
+    }
+
+    def __init__(self, database, parent=None):
+        super().__init__(parent)
+        self.db = database
+        self.setWindowTitle("Lembretes de consulta")
+        self.resize(860, 520)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 22, 22, 22)
+        layout.setSpacing(12)
+
+        titulo = QLabel("Lembretes de consulta")
+        titulo.setStyleSheet("font-size: 20px; font-weight: 700; color: #0f172a;")
+        layout.addWidget(titulo)
+
+        explicacao = QLabel(
+            "Acompanhe os lembretes preparados para as consultas. Enquanto a clínica não tiver "
+            "um WhatsApp Business conectado, o envio manual pelo botão Zap continua disponível."
+        )
+        explicacao.setWordWrap(True)
+        explicacao.setStyleSheet("color: #64748b; font-size: 12px;")
+        layout.addWidget(explicacao)
+
+        self.lbl_resumo = QLabel("Carregando lembretes...")
+        self.lbl_resumo.setStyleSheet(
+            "background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; "
+            "border-radius: 8px; padding: 9px 12px; font-size: 12px;"
+        )
+        layout.addWidget(self.lbl_resumo)
+
+        self.lbl_franquia = QLabel("Franquia mensal: carregando...")
+        self.lbl_franquia.setStyleSheet(
+            "background: #f8fafc; color: #334155; border: 1px solid #cbd5e1; "
+            "border-radius: 8px; padding: 9px 12px; font-size: 12px; font-weight: 600;"
+        )
+        layout.addWidget(self.lbl_franquia)
+
+        self.tabela = QTableWidget()
+        self.tabela.setColumnCount(5)
+        self.tabela.setHorizontalHeaderLabels([
+            "Consulta", "Paciente", "Procedimento", "Situação", "Detalhe",
+        ])
+        self.tabela.verticalHeader().setVisible(False)
+        self.tabela.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tabela.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.tabela.setAlternatingRowColors(True)
+        cabecalho = self.tabela.horizontalHeader()
+        cabecalho.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        cabecalho.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        cabecalho.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        cabecalho.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        cabecalho.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.tabela, 1)
+
+        acoes = QHBoxLayout()
+        acoes.addStretch()
+        atualizar = QPushButton("Atualizar")
+        definir_variante(atualizar, "secondary")
+        atualizar.clicked.connect(self.carregar)
+        fechar = QPushButton("Fechar")
+        definir_variante(fechar, "primary")
+        fechar.clicked.connect(self.accept)
+        acoes.addWidget(atualizar)
+        acoes.addWidget(fechar)
+        layout.addLayout(acoes)
+
+        self.carregar()
+
+    def carregar(self):
+        self.tabela.setRowCount(0)
+        if not self.db or not self.db.supabase or self.db.consultorio_id is None:
+            self.lbl_resumo.setText("Não foi possível identificar a clínica atual.")
+            return
+        try:
+            resumo_franquia = self.db.supabase.rpc(
+                "resumo_franquia_lembretes_whatsapp",
+                {"p_consultorio_id": self.db.consultorio_id},
+            ).execute()
+            dados_franquia = (resumo_franquia.data or [{}])[0]
+            limite = int(dados_franquia.get("limite") or 0)
+            entregues = int(dados_franquia.get("entregues") or 0)
+            reservados = int(dados_franquia.get("reservados") or 0)
+            disponiveis = int(dados_franquia.get("disponiveis") or 0)
+            self.lbl_franquia.setText(
+                f"Franquia mensal: {entregues} de {limite} lembretes entregues · "
+                f"{reservados} aguardando confirmação · {disponiveis} disponíveis"
+            )
+            ocupados = entregues + reservados
+            if limite and ocupados >= limite:
+                self.lbl_franquia.setStyleSheet(
+                    "background: #fff1f2; color: #be123c; border: 1px solid #fda4af; "
+                    "border-radius: 8px; padding: 9px 12px; font-size: 12px; font-weight: 600;"
+                )
+            elif limite and ocupados >= limite * 0.8:
+                self.lbl_franquia.setStyleSheet(
+                    "background: #fffbeb; color: #b45309; border: 1px solid #fcd34d; "
+                    "border-radius: 8px; padding: 9px 12px; font-size: 12px; font-weight: 600;"
+                )
+
+            resposta = (
+                self.db.supabase.table("lembretes_whatsapp")
+                .select("agenda_data,agenda_horario,paciente_nome,procedimento,status,meta_status,ultimo_erro,criado_em")
+                .eq("consultorio_id", self.db.consultorio_id)
+                .order("criado_em", desc=True)
+                .limit(100)
+                .execute()
+            )
+            lembretes = resposta.data or []
+        except Exception:
+            self.lbl_resumo.setText("Não foi possível carregar os lembretes agora. Tente atualizar.")
+            self.lbl_franquia.setText("Não foi possível carregar a franquia mensal.")
+            return
+
+        totais = {"pendente": 0, "processando": 0, "enviado": 0, "falhou": 0}
+        for linha, lembrete in enumerate(lembretes):
+            status = str(lembrete.get("status") or "pendente")
+            meta_status = str(lembrete.get("meta_status") or "").lower()
+            if status in totais:
+                totais[status] += 1
+            self.tabela.insertRow(linha)
+            valores = [
+                f"{lembrete.get('agenda_data') or ''} às {lembrete.get('agenda_horario') or ''}",
+                str(lembrete.get("paciente_nome") or "Paciente"),
+                str(lembrete.get("procedimento") or "Consulta"),
+                self.NOMES_META_STATUS.get(
+                    meta_status,
+                    self.NOMES_STATUS.get(status, status.capitalize()),
+                ),
+                str(lembrete.get("ultimo_erro") or "—"),
+            ]
+            for coluna, valor in enumerate(valores):
+                item = QTableWidgetItem(valor)
+                if coluna == 3 and status == "falhou":
+                    item.setForeground(Qt.GlobalColor.red)
+                elif coluna == 3 and meta_status in {"delivered", "read"}:
+                    item.setForeground(Qt.GlobalColor.darkGreen)
+                self.tabela.setItem(linha, coluna, item)
+
+        self.lbl_resumo.setText(
+            f"{len(lembretes)} lembrete(s): {totais['pendente']} aguardando envio, "
+            f"{totais['processando']} em processamento, {totais['enviado']} enviado(s) e "
+            f"{totais['falhou']} com falha."
+        )
+
+
 def configurar_visibilidade_senha(campo: QLineEdit) -> None:
     """Permite conferir uma senha sem deixá-la visível por padrão."""
     campo.setEchoMode(QLineEdit.EchoMode.Password)
@@ -286,6 +449,9 @@ class ConfiguracoesScreen(QWidget):
         self.setObjectName("ConfiguracoesScreen")
         self.window_principal = window_principal
         self.db = window_principal.db if window_principal else None
+        self.automacao_whatsapp_disponivel = bool(
+            self.db and self.db.possui_recurso("whatsapp_automatico")
+        )
         self._backup_worker = None
         self._pasta_backup_padrao = os.path.join(
             os.path.expanduser("~"), "Documents", "Prontu Backups"
@@ -386,6 +552,32 @@ class ConfiguracoesScreen(QWidget):
         btn_mensagens.clicked.connect(self.abrir_configuracao_mensagens)
         mensagens_layout.addWidget(btn_mensagens)
         main_layout.addWidget(container_mensagens)
+
+        # --- ACOMPANHAMENTO DE LEMBRETES ---
+        container_lembretes = QFrame()
+        container_lembretes.setObjectName("FormCard")
+        lembretes_layout = QHBoxLayout(container_lembretes)
+        lembretes_layout.setContentsMargins(20, 16, 20, 16)
+        lembretes_layout.setSpacing(14)
+        texto_lembretes = QVBoxLayout()
+        titulo_lembretes = QLabel("Lembretes automáticos pelo WhatsApp")
+        titulo_lembretes.setStyleSheet("font-size: 16px; font-weight: bold; color: #0f172a;")
+        descricao_lembretes = QLabel(
+            "Veja o que foi preparado, enviado ou precisa de atenção."
+            if self.automacao_whatsapp_disponivel
+            else "Recurso em preparação. O envio manual pelo botão Zap continua disponível normalmente."
+        )
+        descricao_lembretes.setWordWrap(True)
+        descricao_lembretes.setStyleSheet("color: #64748b; font-size: 12px;")
+        texto_lembretes.addWidget(titulo_lembretes)
+        texto_lembretes.addWidget(descricao_lembretes)
+        lembretes_layout.addLayout(texto_lembretes, 1)
+        btn_lembretes = QPushButton("Ver acompanhamento")
+        definir_variante(btn_lembretes, "secondary")
+        btn_lembretes.clicked.connect(self.abrir_acompanhamento_lembretes)
+        btn_lembretes.setVisible(self.automacao_whatsapp_disponivel)
+        lembretes_layout.addWidget(btn_lembretes)
+        main_layout.addWidget(container_lembretes)
 
         # --- PAINEL DE BACKUP LOCAL CRIPTOGRAFADO ---
         container_backup = QFrame()
@@ -681,6 +873,11 @@ class ConfiguracoesScreen(QWidget):
         dialogo = MensagensWhatsAppDialog(self.db, self)
         if dialogo.exec() == QDialog.DialogCode.Accepted:
             QMessageBox.information(self, "Mensagens salvas", "As mensagens do WhatsApp foram atualizadas.")
+
+    def abrir_acompanhamento_lembretes(self):
+        if not self.db:
+            return
+        AcompanhamentoLembretesDialog(self.db, self).exec()
 
     def carregar_dados_configurados(self):
         """Busca do banco de dados e preenche os campos."""

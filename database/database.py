@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import httpx
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
@@ -120,6 +121,7 @@ class Database:
         if self.session_manager.load_persisted_session():
             self._aplicar_sessao_no_cliente()
             self.consultorio_id = self.session_manager.consultorio_id
+            self._atualizar_contexto_assinatura()
 
     def _aplicar_sessao_no_cliente(self) -> None:
         if not self.supabase or not self.session_manager:
@@ -132,11 +134,228 @@ class Database:
             except Exception as exc:
                 print(f"Aviso: falha ao aplicar sessão ({exc}).")
 
+    def _atualizar_contexto_assinatura(self) -> None:
+        """Atualiza papel e plano ao reabrir o app, sem depender de sessão antiga."""
+        if not self.supabase or not self.session_manager or self.consultorio_id is None:
+            return
+        try:
+            sessao = self.session_manager._session or {}
+            auth_user_id = sessao.get("auth_user_id")
+            if not auth_user_id:
+                usuario = self.supabase.auth.get_user()
+                auth_user_id = getattr(getattr(usuario, "user", None), "id", None)
+            if not auth_user_id:
+                return
+
+            vinculo = self.supabase.table("usuarios_consultorios").select("papel").eq(
+                "consultorio_id", self.consultorio_id
+            ).eq("auth_user_id", auth_user_id).is_("revogado_em", "null").maybe_single().execute()
+            assinatura = self.supabase.table("assinaturas_consultorios").select(
+                "plano, status, max_usuarios, expira_em, recursos_extras"
+            ).eq("consultorio_id", self.consultorio_id).maybe_single().execute()
+            dados_assinatura = assinatura.data or {}
+            sessao.update({
+                "auth_user_id": auth_user_id,
+                "papel": (vinculo.data or {}).get("papel") or sessao.get("papel") or "proprietario",
+                "plano": dados_assinatura.get("plano") or "solo",
+                "status_assinatura": dados_assinatura.get("status") or "ativa",
+                "max_usuarios": dados_assinatura.get("max_usuarios") or 1,
+                "expira_em": dados_assinatura.get("expira_em"),
+                "recursos_extras": dados_assinatura.get("recursos_extras") or [],
+            })
+            self.session_manager._session = sessao
+            if self.session_manager._persist_session:
+                self.session_manager.storage.save_session(sessao)
+        except Exception as erro:
+            print(f"Aviso: nao foi possivel atualizar o plano da sessao ({type(erro).__name__}).")
+
     def esta_autenticado(self) -> bool:
         return (
             self.session_manager is not None
             and self.session_manager.is_authenticated
             and self.consultorio_id is not None
+        )
+
+    def _adotar_sessao_de_login(self, dados: dict, lembrar: bool = True) -> dict | None:
+        """Centraliza a persistência da sessão retornada pelo Auth/Edge Function."""
+        if not self.session_manager:
+            return None
+        access = dados.get("access_token")
+        consultorio_id = dados.get("consultorio_id")
+        if not access or consultorio_id is None:
+            return None
+        sessao = {
+            "access_token": access,
+            "refresh_token": dados.get("refresh_token"),
+            "expires_at": dados.get("expires_at"),
+            "consultorio_id": int(consultorio_id),
+            "nome_clinica": dados.get("nome_clinica"),
+            "auth_user_id": dados.get("auth_user_id"),
+            "papel": dados.get("papel") or "proprietario",
+            "plano": dados.get("plano") or "solo",
+            "status_assinatura": dados.get("status_assinatura") or "ativa",
+            "max_usuarios": dados.get("max_usuarios") or 1,
+            "expira_em": dados.get("expira_em"),
+            "recursos_extras": dados.get("recursos_extras") or [],
+        }
+        self.session_manager._session = sessao
+        self.session_manager._persist_session = lembrar
+        if lembrar:
+            self.session_manager.storage.save_session(sessao)
+        else:
+            self.session_manager.storage.clear_session()
+        self.consultorio_id = sessao["consultorio_id"]
+        self._aplicar_sessao_no_cliente()
+        return sessao
+
+    def entrar_com_email(self, email: str, senha: str, lembrar: bool = True) -> dict | None:
+        """Login real pelo Supabase Auth, seguido da identificação do consultório da pessoa."""
+        if not self.supabase or not self.session_manager or not email or not senha:
+            return None
+        try:
+            resultado = self.supabase.auth.sign_in_with_password({"email": email, "password": senha})
+            sessao_auth = resultado.session
+            usuario = resultado.user
+            if not sessao_auth or not usuario:
+                return None
+
+            vinculo = self.supabase.table("usuarios_consultorios")\
+                .select("consultorio_id, papel")\
+                .eq("auth_user_id", usuario.id)\
+                .is_("revogado_em", "null")\
+                .limit(1)\
+                .execute()
+            if not vinculo.data:
+                self.supabase.auth.sign_out()
+                return None
+
+            membro = vinculo.data[0]
+            consultorio_id = int(membro["consultorio_id"])
+            assinatura = self.supabase.table("assinaturas_consultorios")\
+                .select("plano, status, max_usuarios, expira_em, recursos_extras")\
+                .eq("consultorio_id", consultorio_id)\
+                .maybe_single()\
+                .execute()
+            plano = assinatura.data or {}
+            return self._adotar_sessao_de_login({
+                "access_token": sessao_auth.access_token,
+                "refresh_token": sessao_auth.refresh_token,
+                "expires_at": sessao_auth.expires_at,
+                "consultorio_id": consultorio_id,
+                "auth_user_id": usuario.id,
+                "papel": membro.get("papel") or "proprietario",
+                "plano": plano.get("plano") or "solo",
+                "status_assinatura": plano.get("status") or "ativa",
+                "max_usuarios": plano.get("max_usuarios") or 1,
+                "expira_em": plano.get("expira_em"),
+                "recursos_extras": plano.get("recursos_extras") or [],
+            }, lembrar)
+        except Exception as erro:
+            print(f"Erro ao entrar com e-mail ({type(erro).__name__}).")
+            return None
+
+    def obter_papel_atual(self) -> str:
+        sessao = getattr(self.session_manager, "_session", None) or {}
+        return str(sessao.get("papel") or "proprietario")
+
+    def obter_plano_atual(self) -> str:
+        sessao = getattr(self.session_manager, "_session", None) or {}
+        return str(sessao.get("plano") or "solo")
+
+    def possui_recurso(self, recurso: str) -> bool:
+        sessao = getattr(self.session_manager, "_session", None) or {}
+        if recurso in (sessao.get("recursos_extras") or []):
+            return True
+        por_plano = {
+            "solo": set(),
+            "equipe": {"equipe", "controle_acesso", "base_compartilhada"},
+            "personalizado": {"equipe", "controle_acesso", "base_compartilhada", "personalizacoes"},
+        }
+        return recurso in por_plano.get(self.obter_plano_atual(), set())
+
+    def obter_resumo_assinatura(self) -> dict:
+        sessao = getattr(self.session_manager, "_session", None) or {}
+        return {
+            "plano": self.obter_plano_atual(),
+            "status": sessao.get("status_assinatura") or "ativa",
+            "expira_em": sessao.get("expira_em"),
+            "max_usuarios": sessao.get("max_usuarios") or 1,
+        }
+
+    def _chamar_funcao_auth(self, nome: str, corpo: dict, usar_sessao: bool = False) -> dict | None:
+        if not self.supabase_url or not self.supabase_key:
+            return None
+        token = self.supabase_key
+        if usar_sessao and self.session_manager and self.session_manager.access_token:
+            token = self.session_manager.access_token
+        try:
+            resposta = httpx.post(
+                f"{self.supabase_url}/functions/v1/{nome}",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "apikey": self.supabase_key,
+                    "Content-Type": "application/json",
+                },
+                json=corpo,
+                timeout=30.0,
+            )
+            if resposta.status_code >= 400:
+                return None
+            dados = resposta.json()
+            return dados if isinstance(dados, dict) else None
+        except (httpx.HTTPError, ValueError) as erro:
+            print(f"Erro na função {nome} ({type(erro).__name__}).")
+            return None
+
+    def aceitar_convite_equipe(self, codigo: str, email: str, senha: str) -> dict | None:
+        resultado = self._chamar_funcao_auth("aceitar-convite", {
+            "codigo": codigo.strip(), "email": email.strip(), "senha": senha,
+        })
+        return self._adotar_sessao_de_login(resultado or {}, lembrar=True)
+
+    def criar_login_proprietario(self, email: str, senha: str) -> bool:
+        resultado = self._chamar_funcao_auth("criar-acesso-proprietario", {
+            "email": email.strip(), "senha": senha,
+        }, usar_sessao=True)
+        if resultado and resultado.get("access_token"):
+            self._adotar_sessao_de_login(resultado, lembrar=True)
+        return bool(resultado and not resultado.get("error"))
+
+    def solicitar_redefinicao_senha(self, email: str) -> bool:
+        resultado = self._chamar_funcao_auth("solicitar-redefinicao-senha", {
+            "email": email.strip(),
+        })
+        return bool(resultado and not resultado.get("error"))
+
+    # --- EQUIPE E PERMISSÕES ---
+    # As operações abaixo passam pela Edge Function. Assim, a interface nunca
+    # recebe credenciais administrativas nem decide limites do plano sozinha.
+    def listar_equipe(self) -> dict | None:
+        return self._chamar_funcao_auth("equipe", {"acao": "listar"}, usar_sessao=True)
+
+    def criar_convite_equipe(self, nome: str, email: str, papel: str) -> dict | None:
+        return self._chamar_funcao_auth(
+            "equipe",
+            {"acao": "convidar", "nome": nome.strip(), "email": email.strip(), "papel": papel},
+            usar_sessao=True,
+        )
+
+    def revogar_acesso_equipe(self, tipo: str, identificador: str) -> bool:
+        campo = "convite_id" if tipo == "convite" else "membro_id"
+        resultado = self._chamar_funcao_auth(
+            "equipe", {"acao": "revogar", campo: str(identificador)}, usar_sessao=True
+        )
+        return bool(resultado and not resultado.get("error"))
+
+    def alterar_papel_equipe(self, membro_id: str, papel: str) -> bool:
+        resultado = self._chamar_funcao_auth(
+            "equipe", {"acao": "alterar_papel", "membro_id": str(membro_id), "papel": papel}, usar_sessao=True
+        )
+        return bool(resultado and not resultado.get("error"))
+
+    def renovar_convite_equipe(self, convite_id: str) -> dict | None:
+        return self._chamar_funcao_auth(
+            "equipe", {"acao": "renovar_convite", "convite_id": str(convite_id)}, usar_sessao=True
         )
 
     def validar_chave_acesso(self, chave_inserida: str) -> dict | None:
@@ -161,6 +380,7 @@ class Database:
         return {
             "consultorio_id": self.consultorio_id,
             "nome_clinica": resultado.get("nome_clinica"),
+            "plano": resultado.get("plano") or "solo",
         }
 
     def renovar_sessao_se_necessario(self) -> bool:
@@ -226,6 +446,115 @@ class Database:
             ).execute()
         except Exception as exc:
             print(f"Aviso: falha ao registrar auditoria ({acao}/{entidade}): {exc}")
+
+    def listar_eventos_auditoria(self, limite: int = 300) -> list[dict]:
+        """Retorna somente metadados de auditoria do consultório ativo."""
+        if not self.supabase or self.consultorio_id is None:
+            return []
+        try:
+            resposta = (
+                self.supabase.table("audit_logs")
+                .select("id, acao, entidade, registro_id, contexto, valor_anterior, valor_novo, criado_em")
+                .eq("consultorio_id", self.consultorio_id)
+                .order("criado_em", desc=True)
+                .limit(limite)
+                .execute()
+            )
+            return resposta.data or []
+        except Exception as erro:
+            print(f"Aviso: falha ao listar auditoria ({type(erro).__name__}).")
+            return []
+
+    # --- RETORNOS CLÍNICOS ---
+    def criar_retorno(self, paciente_id: int, data_prevista: str | None = None, motivo: str = "") -> bool:
+        if not self.supabase or self.consultorio_id is None or not paciente_id:
+            return False
+        try:
+            self.supabase.table("retornos_pacientes").insert({
+                "consultorio_id": self.consultorio_id,
+                "paciente_id": int(paciente_id),
+                "data_prevista": data_prevista or None,
+                "motivo": (motivo or "").strip(),
+                "status": "Pendente",
+            }).execute()
+            self.registrar_evento_auditoria("INSERT", "retornos_pacientes", paciente_id, {"data_prevista": data_prevista})
+            return True
+        except Exception as erro:
+            print(f"Aviso: falha ao criar retorno ({type(erro).__name__}).")
+            return False
+
+    def listar_retornos_pendentes(self, limite: int = 100) -> list[dict]:
+        if not self.supabase or self.consultorio_id is None:
+            return []
+        try:
+            resposta = (
+                self.supabase.table("retornos_pacientes")
+                .select("id, paciente_id, data_prevista, motivo, status")
+                .eq("consultorio_id", self.consultorio_id)
+                .eq("status", "Pendente")
+                .order("data_prevista", nullsfirst=False)
+                .limit(limite)
+                .execute()
+            )
+            retornos = resposta.data or []
+            ids = list({item.get("paciente_id") for item in retornos if item.get("paciente_id") is not None})
+            if not ids:
+                return retornos
+            pacientes = (
+                self.supabase.table("pacientes").select("id, nome")
+                .eq("consultorio_id", self.consultorio_id).in_("id", ids)
+                .is_("deleted_at", "null").execute()
+            )
+            nomes = {item["id"]: item.get("nome", "Paciente") for item in (pacientes.data or [])}
+            for retorno in retornos:
+                retorno["paciente_nome"] = nomes.get(retorno.get("paciente_id"), "Paciente indisponível")
+            return retornos
+        except Exception as erro:
+            print(f"Aviso: falha ao listar retornos ({type(erro).__name__}).")
+            return []
+
+    def listar_retornos_paciente(self, paciente_id: int) -> list[dict]:
+        if not self.supabase or self.consultorio_id is None or not paciente_id:
+            return []
+        try:
+            resposta = (
+                self.supabase.table("retornos_pacientes")
+                .select("id, data_prevista, motivo, status, criado_em")
+                .eq("consultorio_id", self.consultorio_id).eq("paciente_id", int(paciente_id))
+                .order("criado_em", desc=True).execute()
+            )
+            return resposta.data or []
+        except Exception as erro:
+            print(f"Aviso: falha ao listar retornos do paciente ({type(erro).__name__}).")
+            return []
+
+    def atualizar_status_retorno(self, retorno_id: int, status: str) -> bool:
+        if not self.supabase or self.consultorio_id is None:
+            return False
+        permitidos = {"Pendente", "Agendado", "Concluído", "Não retornou", "Cancelado"}
+        if status not in permitidos:
+            return False
+        try:
+            self.supabase.table("retornos_pacientes").update({"status": status}).eq(
+                "id", int(retorno_id)
+            ).eq("consultorio_id", self.consultorio_id).execute()
+            self.registrar_evento_auditoria("UPDATE", "retornos_pacientes", retorno_id, {"status": status})
+            return True
+        except Exception as erro:
+            print(f"Aviso: falha ao atualizar retorno ({type(erro).__name__}).")
+            return False
+
+    def definir_data_retorno(self, retorno_id: int, data_prevista: str) -> bool:
+        if not self.supabase or self.consultorio_id is None or not retorno_id or not data_prevista:
+            return False
+        try:
+            self.supabase.table("retornos_pacientes").update({"data_prevista": data_prevista}).eq(
+                "id", int(retorno_id)
+            ).eq("consultorio_id", self.consultorio_id).execute()
+            return True
+        except Exception as erro:
+            print(f"Aviso: falha ao definir data do retorno ({type(erro).__name__}).")
+            return False
 
     # --- FUNÇÕES DE CONFIGURAÇÃO ---
     def obter_nome_profissional(self):
@@ -380,6 +709,19 @@ class Database:
         """Exclusão lógica — preserva dados clínicos."""
         if not self.supabase or self.consultorio_id is None:
             return False
+        try:
+            from datetime import datetime, timezone
+            agora = datetime.now(timezone.utc).isoformat()
+            self.supabase.table("pacientes").update({"deleted_at": agora}).eq(
+                "id", int(paciente_id)
+            ).eq("consultorio_id", self.consultorio_id).execute()
+            self.supabase.table("fichas_preenchidas").update({"deleted_at": agora}).eq(
+                "paciente_id", int(paciente_id)
+            ).eq("consultorio_id", self.consultorio_id).execute()
+            return True
+        except Exception as erro:
+            print(f"Erro ao excluir paciente: {erro}")
+            return False
 
     def soft_delete_ficha(self, ficha_id: int) -> bool:
         """Remove uma ficha da visualização sem apagar seu histórico clínico."""
@@ -395,19 +737,54 @@ class Database:
         except Exception as e:
             print(f"Erro ao excluir ficha: {e}")
             return False
-        try:
-            from datetime import datetime, timezone
 
-            agora = datetime.now(timezone.utc).isoformat()
-            self.supabase.table("pacientes").update(
-                {"deleted_at": agora}
-            ).eq("id", paciente_id).eq("consultorio_id", self.consultorio_id).execute()
-            self.supabase.table("fichas_preenchidas").update(
-                {"deleted_at": agora}
-            ).eq("paciente_id", paciente_id).eq(
-                "consultorio_id", self.consultorio_id
-            ).execute()
-            return True
-        except Exception as e:
-            print(f"Erro ao excluir paciente (soft delete): {e}")
+    def atualizar_respostas_ficha(self, ficha_id: int, dados_respostas: dict) -> bool:
+        if not self.supabase or self.consultorio_id is None:
             return False
+        try:
+            self.supabase.table("fichas_preenchidas").update({
+                "dados_respostas": dados_respostas
+            }).eq("id", int(ficha_id)).eq("consultorio_id", self.consultorio_id).execute()
+            return True
+        except Exception as erro:
+            print(f"Erro ao atualizar ficha: {erro}")
+            return False
+
+    def listar_pacientes_secretaria(self, busca: str | None = None) -> list[dict]:
+        if not self.supabase or self.consultorio_id is None:
+            return []
+        try:
+            resposta = self.supabase.rpc("listar_pacientes_secretaria", {"p_busca": busca}).execute()
+            return resposta.data or []
+        except Exception as erro:
+            print(f"Erro ao listar pacientes básicos: {type(erro).__name__}.")
+            return []
+
+    def obter_paciente_secretaria(self, paciente_id: int) -> dict | None:
+        if not self.supabase or not paciente_id:
+            return None
+        try:
+            resposta = self.supabase.rpc("obter_paciente_secretaria", {"p_paciente_id": int(paciente_id)}).execute()
+            dados = resposta.data or []
+            return dados[0] if isinstance(dados, list) and dados else None
+        except Exception as erro:
+            print(f"Erro ao obter paciente básico: {type(erro).__name__}.")
+            return None
+
+    def salvar_paciente_secretaria(self, paciente_id: int | None, dados: dict) -> int | None:
+        if not self.supabase:
+            return None
+        try:
+            resposta = self.supabase.rpc("salvar_paciente_secretaria", {
+                "p_paciente_id": paciente_id,
+                "p_nome": dados.get("nome"),
+                "p_telefone": dados.get("telefone"),
+                "p_nascimento": dados.get("nascimento"),
+                "p_convenio": dados.get("convenio"),
+                "p_pasta": dados.get("pasta"),
+                "p_sexo": dados.get("sexo"),
+            }).execute()
+            return int(resposta.data) if resposta.data is not None else None
+        except Exception as erro:
+            print(f"Erro ao salvar paciente básico: {type(erro).__name__}.")
+            return None
