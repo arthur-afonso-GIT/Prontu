@@ -51,6 +51,7 @@ class AgendaScreen(QWidget):
         self.data_visualizada = QDate.currentDate()
         self.lista_pacientes_disponiveis = []
         self.db_agendamentos = {}
+        self.retornos_pendentes_por_paciente = {}
         self.alertas_respostas_whatsapp = {}
         self._retorno_em_agendamento = None
         self._formulario_editado_pelo_usuario = False
@@ -371,7 +372,55 @@ class AgendaScreen(QWidget):
                     }
         except Exception as e:
             print(f"Erro ao carregar agendamentos do Supabase: {e}")
+        self.carregar_retornos_pendentes_cache()
+        self.garantir_retornos_de_consultas_realizadas()
         self.carregar_alertas_respostas_whatsapp()
+
+    @staticmethod
+    def _chave_nome_paciente(nome):
+        return " ".join(str(nome or "").strip().casefold().split())
+
+    def carregar_retornos_pendentes_cache(self):
+        """Mantém as decisões de retorno disponíveis na Agenda sem consultar por cartão."""
+        self.retornos_pendentes_por_paciente = {}
+        if not hasattr(self.db_gerenciador, "listar_retornos_pendentes"):
+            return
+        for retorno in self.db_gerenciador.listar_retornos_pendentes():
+            chave = self._chave_nome_paciente(retorno.get("paciente_nome"))
+            if chave:
+                self.retornos_pendentes_por_paciente[chave] = retorno
+
+    def garantir_retornos_de_consultas_realizadas(self):
+        """Recupera consultas já concluídas que ficaram sem decisão de retorno."""
+        if not hasattr(self.db_gerenciador, "criar_retorno_pendente_da_consulta"):
+            return
+        candidatos = {}
+        for data_consulta, agenda_dia in self.db_agendamentos.items():
+            for hora_consulta, dados in agenda_dia.items():
+                if dados.get("tipo_bloco") != "principal":
+                    continue
+                if "Realizada" not in str(dados.get("status") or ""):
+                    continue
+                if str(dados.get("procedimento") or "").strip().casefold() == "retorno":
+                    continue
+                chave = self._chave_nome_paciente(dados.get("paciente"))
+                if not chave or chave in self.retornos_pendentes_por_paciente:
+                    continue
+                momento = QDateTime.fromString(
+                    f"{data_consulta} {hora_consulta}", "dd/MM/yyyy hh:mm"
+                )
+                anterior = candidatos.get(chave)
+                if not anterior or momento > anterior[0]:
+                    candidatos[chave] = (momento, data_consulta, hora_consulta, dados)
+
+        # Somente a consulta concluída mais recente de cada paciente é recuperada.
+        # Assim a atualização não transforma todo o histórico antigo em pendências.
+        for chave, (_, data_consulta, hora_consulta, dados) in candidatos.items():
+            retorno = self.db_gerenciador.criar_retorno_pendente_da_consulta(
+                str(dados.get("paciente") or ""), data_consulta, hora_consulta
+            )
+            if retorno and retorno.get("status") == "Pendente":
+                self.retornos_pendentes_por_paciente[chave] = retorno
 
     def carregar_alertas_respostas_whatsapp(self):
         """Busca respostas recebidas que ainda precisam de ação da equipe."""
@@ -601,7 +650,34 @@ class AgendaScreen(QWidget):
                     area_acoes_layout = QHBoxLayout(area_acoes)
                     area_acoes_layout.setContentsMargins(0, 0, 0, 0)
                     area_acoes_layout.setSpacing(8)
+                    area_acoes_layout.setAlignment(
+                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    )
+                    area_acoes.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                     self.adicionar_acoes_rapidas_consulta(area_acoes_layout, hora, status_txt)
+
+                    chave_paciente = self._chave_nome_paciente(dados.get("paciente"))
+                    retorno_pendente = self.retornos_pendentes_por_paciente.get(chave_paciente)
+                    if "Realizada" in status_txt and retorno_pendente:
+                        btn_agendar_retorno = QPushButton("Agendar retorno")
+                        btn_agendar_retorno.setToolTip("Escolher a data e preparar o retorno na Agenda")
+                        btn_agendar_retorno.setFixedSize(126, 36)
+                        btn_agendar_retorno.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+                        definir_variante(btn_agendar_retorno, "secondary")
+                        btn_agendar_retorno.clicked.connect(
+                            lambda checked=False, h=hora: self.agendar_retorno_da_consulta(h)
+                        )
+                        area_acoes_layout.addWidget(btn_agendar_retorno)
+
+                        btn_sem_retorno = QPushButton("Não retornará")
+                        btn_sem_retorno.setToolTip("Registrar que não haverá retorno desta consulta")
+                        btn_sem_retorno.setFixedSize(118, 36)
+                        btn_sem_retorno.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+                        definir_variante(btn_sem_retorno, "danger")
+                        btn_sem_retorno.clicked.connect(
+                            lambda checked=False, h=hora: self.marcar_sem_retorno_da_consulta(h)
+                        )
+                        area_acoes_layout.addWidget(btn_sem_retorno)
 
                     if not any(termo in status_txt for termo in ("Realizada", "Cancelada", "Faltou")):
                         btn_lembrete = QPushButton("Enviar lembrete")
@@ -623,7 +699,7 @@ class AgendaScreen(QWidget):
                             "QPushButton:hover { background: #0369a1; }"
                         )
                         btn_ficha.clicked.connect(lambda checked=False, h=hora: self.abrir_ficha_da_consulta(h))
-                        btn_ficha.setFixedSize(88, 34)
+                        btn_ficha.setFixedSize(96, 36)
                         area_acoes_layout.addWidget(btn_ficha)
 
                     btn_remover.setFixedSize(24, 24)
@@ -685,6 +761,10 @@ class AgendaScreen(QWidget):
         filtro_status = self.filtro_status.currentData()
         consultas_semana = []
         grade_semana = QFrame()
+        grade_semana.setObjectName("GradeSemanalTabela")
+        grade_semana.setStyleSheet(
+            "QFrame#GradeSemanalTabela { background: #ffffff; border: 1px solid #aebed0; }"
+        )
         layout_semana = QGridLayout(grade_semana)
         layout_semana.setContentsMargins(0, 0, 0, 0)
         layout_semana.setHorizontalSpacing(0)
@@ -694,7 +774,7 @@ class AgendaScreen(QWidget):
         canto = QLabel("Horário")
         canto.setAlignment(Qt.AlignmentFlag.AlignCenter)
         canto.setFixedHeight(50)
-        canto.setStyleSheet("background: #f5f8fc; border: 1px solid #d7e2ef; color: #52657f; font-size: 11px; font-weight: 700;")
+        canto.setStyleSheet("background: #eef4fa; border: 1px solid #b8c7d9; color: #52657f; font-size: 11px; font-weight: 700;")
         layout_semana.addWidget(canto, 0, 0)
 
         dados_por_dia = {}
@@ -708,7 +788,7 @@ class AgendaScreen(QWidget):
             titulo_dia.setToolTip("Abrir agenda detalhada deste dia")
             titulo_dia.setFixedHeight(50)
             titulo_dia.setStyleSheet(
-                "QPushButton { background: #f5f8fc; border: 1px solid #d7e2ef; border-radius: 0; "
+                "QPushButton { background: #eef4fa; border: 1px solid #b8c7d9; border-radius: 0; "
                 "color: #17233a; font-size: 11px; font-weight: 700; padding: 4px; } "
                 "QPushButton:hover { background: #e4f3ff; color: #075985; border-color: #76b8e8; }"
             )
@@ -732,7 +812,7 @@ class AgendaScreen(QWidget):
             rotulo_hora = QLabel(hora)
             rotulo_hora.setAlignment(Qt.AlignmentFlag.AlignCenter)
             rotulo_hora.setFixedHeight(48)
-            rotulo_hora.setStyleSheet("background: #f8fafc; border: 1px solid #d7e2ef; color: #475569; font-weight: 700;")
+            rotulo_hora.setStyleSheet("background: #f4f7fb; border: 1px solid #b8c7d9; color: #475569; font-weight: 700;")
             layout_semana.addWidget(rotulo_hora, linha, 0)
 
             for deslocamento in range(7):
@@ -748,7 +828,7 @@ class AgendaScreen(QWidget):
                     celula.setCursor(Qt.CursorShape.PointingHandCursor)
                     celula.setToolTip("Clique para abrir a agenda detalhada deste dia")
                     celula.setStyleSheet(
-                        f"QFrame {{ background: #ffffff; border: 1px solid #d7e2ef; border-left: 4px solid {cor}; }} "
+                        f"QFrame {{ background: #ffffff; border: 1px solid #b8c7d9; border-left: 4px solid {cor}; }} "
                         "QFrame:hover { background: #edf8ff; }"
                     )
                     celula.mousePressEvent = lambda event, d=QDate(data): self.abrir_dia_da_semana(d)
@@ -763,7 +843,7 @@ class AgendaScreen(QWidget):
                     layout_celula.addWidget(procedimento)
                     consultas_semana.append(dados)
                 else:
-                    celula.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #e1eaf3; }")
+                    celula.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #c3cfdd; }")
                 layout_semana.addWidget(celula, linha, deslocamento + 1)
 
         self.atualizar_resumo_do_periodo(consultas_semana, "Resumo da semana")
@@ -1129,6 +1209,8 @@ class AgendaScreen(QWidget):
         acoes_layout = QHBoxLayout(acoes)
         acoes_layout.setContentsMargins(0, 0, 0, 0)
         acoes_layout.setSpacing(8)
+        acoes_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        acoes.setFixedHeight(36)
 
         def adicionar_botao(texto, variante, novo_status, dica):
             botao = QPushButton(texto)
@@ -1191,6 +1273,9 @@ class AgendaScreen(QWidget):
         elif "Realizada" in status:
             status_final = QLabel("Concluída")
             status_final.setStyleSheet("color: #047857; font-size: 12px; font-weight: 700; border: none;")
+            status_final.setFixedHeight(36)
+            status_final.setMinimumWidth(64)
+            status_final.setAlignment(Qt.AlignmentFlag.AlignCenter)
             acoes_layout.addWidget(status_final)
         elif "Cancelada" in status:
             status_final = QLabel("Cancelada")
@@ -1235,7 +1320,7 @@ class AgendaScreen(QWidget):
             return
 
         paciente = str(dados.get("paciente") or "").strip()
-        telefone = self.db_gerenciador.obter_telefone_paciente_por_nome(paciente)
+        telefone = self.db_gerenciador.obter_telefone_paciente_por_nome(paciente) or ""
         numero = "".join(caractere for caractere in telefone if caractere.isdigit())
         if not numero:
             QMessageBox.warning(
@@ -1261,9 +1346,96 @@ class AgendaScreen(QWidget):
         }
         for marcador, valor in valores.items():
             mensagem = mensagem.replace(marcador, valor)
-        webbrowser.open(
-            f"https://web.whatsapp.com/send?phone={numero}&text={urllib.parse.quote(mensagem)}"
+        url = f"https://web.whatsapp.com/send?phone={numero}&text={urllib.parse.quote(mensagem)}"
+        try:
+            if not webbrowser.open(url, new=2):
+                raise RuntimeError("O navegador padrão não aceitou a abertura do link")
+        except Exception:
+            QMessageBox.warning(
+                self,
+                "WhatsApp não aberto",
+                "Não foi possível abrir o WhatsApp no navegador. Verifique o navegador padrão e tente novamente.",
+            )
+
+    def _retorno_pendente_do_horario(self, hora):
+        str_data = self.data_visualizada.toString("dd/MM/yyyy")
+        dados = self.db_agendamentos.get(str_data, {}).get(hora, {})
+        chave = self._chave_nome_paciente(dados.get("paciente"))
+        return dados, self.retornos_pendentes_por_paciente.get(chave)
+
+    def _escolher_data_retorno_consulta(self):
+        dialogo = QDialog(self)
+        dialogo.setWindowTitle("Agendar retorno")
+        dialogo.setMinimumWidth(420)
+        layout = QVBoxLayout(dialogo)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+        layout.addWidget(QLabel("Escolha a data prevista para o retorno:"))
+
+        calendario = QCalendarWidget()
+        calendario.setGridVisible(True)
+        calendario.setMinimumDate(QDate.currentDate())
+        calendario.setSelectedDate(QDate.currentDate().addDays(30))
+        layout.addWidget(calendario)
+
+        botoes = QHBoxLayout()
+        botoes.addStretch()
+        cancelar = QPushButton("Cancelar")
+        continuar = QPushButton("Continuar para a Agenda")
+        definir_variante(cancelar, "secondary")
+        definir_variante(continuar, "primary")
+        cancelar.clicked.connect(dialogo.reject)
+        continuar.clicked.connect(dialogo.accept)
+        botoes.addWidget(cancelar)
+        botoes.addWidget(continuar)
+        layout.addLayout(botoes)
+        if dialogo.exec() != QDialog.DialogCode.Accepted:
+            return ""
+        return calendario.selectedDate().toString("yyyy-MM-dd")
+
+    def agendar_retorno_da_consulta(self, hora):
+        """Escolhe a data e prepara na Agenda a pendência criada ao concluir a consulta."""
+        dados, retorno = self._retorno_pendente_do_horario(hora)
+        if not retorno:
+            QMessageBox.information(self, "Retorno já tratado", "Esta consulta não possui retorno pendente.")
+            return
+        data_prevista = self._escolher_data_retorno_consulta()
+        if not data_prevista:
+            return
+        if not self.db_gerenciador.definir_data_retorno(retorno.get("id"), data_prevista):
+            QMessageBox.warning(self, "Data não salva", "Não foi possível preparar o retorno agora.")
+            return
+        retorno["data_prevista"] = data_prevista
+        retorno["paciente_nome"] = str(dados.get("paciente") or retorno.get("paciente_nome") or "")
+        self.preencher_agendamento_retorno(retorno)
+
+    def marcar_sem_retorno_da_consulta(self, hora):
+        """Encerra a pendência quando a equipe confirma que o paciente não retornará."""
+        dados, retorno = self._retorno_pendente_do_horario(hora)
+        if not retorno:
+            return
+        resposta = QMessageBox.question(
+            self,
+            "Confirmar ausência de retorno",
+            f"Confirmar que {str(dados.get('paciente') or 'o paciente')} não retornará?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
+        if resposta != QMessageBox.StandardButton.Yes:
+            return
+        if not self.db_gerenciador.atualizar_status_retorno(retorno.get("id"), "Não retornou"):
+            QMessageBox.warning(self, "Retorno não atualizado", "Não foi possível concluir esta decisão agora.")
+            return
+        chave = self._chave_nome_paciente(dados.get("paciente"))
+        self.retornos_pendentes_por_paciente.pop(chave, None)
+        self._atualizar_home_apos_retorno()
+        self.renderizar_timeline_calendario()
+
+    def _atualizar_home_apos_retorno(self):
+        janela = getattr(self, "window_principal", None) or self.window()
+        tela_home = getattr(janela, "screen_home", None)
+        if tela_home and hasattr(tela_home, "renderizar_lista_pastas"):
+            tela_home.renderizar_lista_pastas(force=True)
 
     def salvar_agendamento_click(self):
         self.input_paciente.blockSignals(True)
@@ -1364,6 +1536,11 @@ class AgendaScreen(QWidget):
                 self._retorno_em_agendamento.get("id"), "Agendado"
             )
             if retorno_atualizado:
+                chave_retorno = self._chave_nome_paciente(
+                    self._retorno_em_agendamento.get("paciente_nome") or paciente
+                )
+                self.retornos_pendentes_por_paciente.pop(chave_retorno, None)
+                self._atualizar_home_apos_retorno()
                 self._retorno_em_agendamento = None
         
         self.input_paciente.blockSignals(False)
@@ -1556,7 +1733,7 @@ class AgendaScreen(QWidget):
             QMessageBox.warning(self, "Status não atualizado", "Não foi possível salvar o novo status da consulta.")
             return
         dados["status"] = novo_status
-        self._sincronizar_retorno_da_consulta(dados, novo_status)
+        self._sincronizar_retorno_da_consulta(dados, novo_status, str_data, hora)
         self.renderizar_timeline_calendario()
 
     def _salvar_status_agendamento_no_db(self, data, hora, novo_status):
@@ -1575,7 +1752,7 @@ class AgendaScreen(QWidget):
             self._ultimo_erro_agenda = type(erro).__name__
             return False
 
-    def _sincronizar_retorno_da_consulta(self, dados, status_consulta):
+    def _sincronizar_retorno_da_consulta(self, dados, status_consulta, data_consulta="", hora_consulta=""):
         """Mantem o retorno vinculado coerente com o destino da consulta."""
         retorno_id = dados.get("retorno_id")
         if not retorno_id:
@@ -1587,16 +1764,20 @@ class AgendaScreen(QWidget):
                 and procedimento != "retorno"
                 and hasattr(self.db_gerenciador, "criar_retorno_pendente_da_consulta")
             ):
-                criado = self.db_gerenciador.criar_retorno_pendente_da_consulta(
-                    str(dados.get("paciente") or "")
+                retorno_criado = self.db_gerenciador.criar_retorno_pendente_da_consulta(
+                    str(dados.get("paciente") or ""), data_consulta, hora_consulta
                 )
-                if not criado:
+                if not retorno_criado:
                     QMessageBox.warning(
                         self,
                         "Retorno não criado",
                         "A consulta foi marcada como realizada, mas não foi possível criar o retorno pendente. "
                         "Verifique se a atualização de retornos foi executada no Supabase.",
                     )
+                elif retorno_criado.get("status") == "Pendente":
+                    chave = self._chave_nome_paciente(dados.get("paciente"))
+                    self.retornos_pendentes_por_paciente[chave] = retorno_criado
+                    self._atualizar_home_apos_retorno()
             return
         if not hasattr(self.db_gerenciador, "atualizar_status_retorno"):
             return
@@ -1626,9 +1807,15 @@ class AgendaScreen(QWidget):
             if not resposta.data:
                 QMessageBox.warning(self, "Paciente não encontrado", "Não foi possível localizar o paciente desta consulta.")
                 return
-            janela = getattr(self, "window_principal", None)
+            janela = getattr(self, "window_principal", None) or self.window()
             if janela and hasattr(janela, "abrir_nova_ficha_para_paciente"):
                 janela.abrir_nova_ficha_para_paciente(resposta.data[0]["id"])
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Navegação indisponível",
+                    "Não foi possível abrir a tela de fichas agora. Reinicie o Prontu e tente novamente.",
+                )
         except Exception as e:
             print(f"Erro ao abrir ficha pela agenda: {e}")
             QMessageBox.warning(self, "Não foi possível abrir", "Não foi possível abrir a ficha deste paciente agora.")

@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from ui.design_system import definir_variante
 
+from services.backup_crypto import BackupCryptoError, BackupIntegrityError
 from services.backup_service import BackupService
 from services.backup_worker import BackupWorker
 
@@ -494,7 +495,7 @@ class ConfiguracoesScreen(QWidget):
         assinatura_layout.addWidget(self.lbl_limite_assinatura)
         main_layout.addWidget(container_assinatura)
         
-        # --- PAINEL DE PERFIL DO PROFISSIONAL ---
+        # --- PAINEL DE PERFIL INDIVIDUAL ---
         container_perfil = QFrame()
         container_perfil.setObjectName("FormCard")
         
@@ -502,13 +503,22 @@ class ConfiguracoesScreen(QWidget):
         perfil_layout.setContentsMargins(20, 20, 20, 20)
         perfil_layout.setSpacing(12)
         
-        lbl_secao = QLabel("Perfil do Usuário / Médico")
+        lbl_secao = QLabel("Perfil do usuário")
         lbl_secao.setStyleSheet("font-size: 16px; font-weight: bold; color: #0f172a; margin-bottom: 5px;")
         perfil_layout.addWidget(lbl_secao)
         
-        perfil_layout.addWidget(QLabel("Nome do Profissional (Ex: Dra. Laura Silva, Dr. Carlos):"))
+        papel_atual = self.db.obter_papel_atual() if self.db else "proprietario"
+        textos_papel = {
+            "proprietario": "Proprietário da clínica",
+            "profissional": "Profissional",
+            "secretaria": "Secretária",
+        }
+        self.lbl_papel_perfil = QLabel(textos_papel.get(papel_atual, "Integrante da equipe"))
+        self.lbl_papel_perfil.setStyleSheet("color: #64748b; font-size: 12px;")
+        perfil_layout.addWidget(self.lbl_papel_perfil)
+        perfil_layout.addWidget(QLabel("Seu nome de exibição:"))
         self.input_nome = QLineEdit()
-        self.input_nome.setPlaceholderText("Digite como deseja ser saudado na página inicial...")
+        self.input_nome.setPlaceholderText("Digite como deseja aparecer no Prontu...")
         perfil_layout.addWidget(self.input_nome)
         
         # Layout inferior para botões de ação
@@ -829,8 +839,17 @@ class ConfiguracoesScreen(QWidget):
                 self, "Restauração", resumo
             )
             self.carregar_dados_configurados()
-        except Exception:
-            QMessageBox.critical(self, "Restauração", "Falha na restauração. Verifique senha e arquivo.")
+        except BackupCryptoError as erro:
+            QMessageBox.critical(self, "Restauração", str(erro))
+        except (BackupIntegrityError, ValueError, RuntimeError) as erro:
+            QMessageBox.critical(self, "Restauração", str(erro))
+        except Exception as erro:
+            print(f"Erro inesperado ao restaurar backup ({type(erro).__name__}): {erro}")
+            QMessageBox.critical(
+                self,
+                "Restauração",
+                "O backup não pôde ser restaurado devido a uma falha inesperada.",
+            )
 
     def _solicitar_senha_backup(self) -> str:
         """Solicita a senha com opção de conferi-la antes de restaurar."""
@@ -885,7 +904,6 @@ class ConfiguracoesScreen(QWidget):
             return
         self.atualizar_cartao_assinatura()
         defaults = {
-            "nome_profissional": "",
             "backup_dir": self._pasta_backup_padrao,
             "backup_freq": "manual",
             "backup_retencao": "30",
@@ -896,7 +914,7 @@ class ConfiguracoesScreen(QWidget):
             "backup_last_error": "",
         }
         valores = defaults | self.db.obter_configuracoes(list(defaults))
-        nome_atual = valores["nome_profissional"]
+        nome_atual = self.db.obter_nome_profissional()
         self.input_nome.setText(nome_atual)
 
         self.input_backup_dir.setText(
@@ -967,8 +985,16 @@ class ConfiguracoesScreen(QWidget):
         """Grava as alterações e avisa a Home que ela precisa se atualizar."""
         nome_digitado = self.input_nome.text().strip()
         
-        # Salva de forma persistente no SQLite
-        self.db.salvar_nome_profissional(nome_digitado)
+        if not nome_digitado:
+            QMessageBox.warning(self, "Nome obrigatório", "Informe seu nome de exibição antes de salvar.")
+            return
+        if not self.db.salvar_nome_profissional(nome_digitado):
+            QMessageBox.critical(
+                self,
+                "Perfil não salvo",
+                "Não foi possível salvar seu perfil. Verifique se a atualização do banco foi executada.",
+            )
+            return
             
         # Alerta de Sucesso
         msg = QMessageBox(self)

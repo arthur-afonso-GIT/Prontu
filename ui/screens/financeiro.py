@@ -98,6 +98,8 @@ class FinanceiroScreen(QWidget):
         self.combo_status = QComboBox()
         self.combo_status.addItems(["Pendente", "Parcial", "Pago", "Isento"])
         form.addWidget(self.combo_status)
+        self.input_valor.textChanged.connect(self._atualizar_status_automatico)
+        self.input_recebido.textChanged.connect(self._atualizar_status_automatico)
         form.addWidget(QLabel("Forma de pagamento:"))
         self.combo_forma = QComboBox()
         self.combo_forma.addItems(["Não informado", "Pix", "Dinheiro", "Cartão", "Transferência", "Convênio"])
@@ -147,6 +149,32 @@ class FinanceiroScreen(QWidget):
     def _definir_card(self, card, valor):
         card.findChild(QLabel, "valor").setText(valor)
 
+    @staticmethod
+    def _calcular_status_pagamento(valor, recebido, status_atual="Pendente"):
+        """Mantém Isento manual e calcula os demais estados pelos valores informados."""
+        valor = float(valor or 0)
+        recebido = float(recebido or 0)
+        if status_atual == "Isento" and recebido <= 0:
+            return "Isento"
+        if recebido <= 0:
+            return "Pendente"
+        if valor <= 0 or recebido >= valor:
+            return "Pago"
+        return "Parcial"
+
+    def _atualizar_status_automatico(self, *_):
+        valor = self._numero(self.input_valor.text())
+        recebido = self._numero(self.input_recebido.text())
+        if valor is None or recebido is None:
+            return
+        status = self._calcular_status_pagamento(
+            valor,
+            recebido,
+            self.combo_status.currentText(),
+        )
+        if self.combo_status.currentText() != status:
+            self.combo_status.setCurrentText(status)
+
     def carregar_dados(self):
         self.registros = []
         if not self.db.supabase:
@@ -186,7 +214,12 @@ class FinanceiroScreen(QWidget):
         for linha, registro in enumerate(sorted(self.registros, key=lambda r: (r["agenda_data"], r["agenda_horario"]), reverse=True)):
             valor = float(registro.get("valor") or 0)
             recebido = float(registro.get("valor_recebido") or 0)
-            status = registro.get("status_pagamento") or "Pendente"
+            status = self._calcular_status_pagamento(
+                valor,
+                recebido,
+                registro.get("status_pagamento") or "Pendente",
+            )
+            registro["status_pagamento"] = status
             if registro["agenda_data"].endswith(mes_atual):
                 if status == "Pago":
                     recebido_mes += recebido
@@ -231,6 +264,7 @@ class FinanceiroScreen(QWidget):
         self.combo_status.setCurrentText(registro.get("status_pagamento") or "Pendente")
         self.combo_forma.setCurrentText(registro.get("forma_pagamento") or "Não informado")
         self.input_observacao.setText(registro.get("observacao") or "")
+        self._atualizar_status_automatico()
 
     def salvar_pagamento(self):
         if not iniciar_operacao(self.btn_salvar, "Salvando pagamento..."):
@@ -246,13 +280,19 @@ class FinanceiroScreen(QWidget):
             finalizar_operacao(self.btn_salvar)
             QMessageBox.warning(self, "Valor inválido", "Informe valores válidos, por exemplo: 150,00.")
             return
+        status_pagamento = self._calcular_status_pagamento(
+            valor,
+            recebido,
+            self.combo_status.currentText(),
+        )
+        self.combo_status.setCurrentText(status_pagamento)
         try:
             cid = int(self.db.consultorio_id)
             registro = self.registro_selecionado
             payload = {
                 "consultorio_id": cid, "agenda_data": registro["agenda_data"], "agenda_horario": registro["agenda_horario"],
                 "paciente": registro.get("paciente", ""), "procedimento": registro.get("procedimento", ""),
-                "valor": valor, "valor_recebido": recebido, "status": self.combo_status.currentText(),
+                "valor": valor, "valor_recebido": recebido, "status": status_pagamento,
                 "forma_pagamento": self.combo_forma.currentText(), "observacao": self.input_observacao.text().strip(),
             }
             tabela = self.db.supabase.table("pagamentos_consultas")
@@ -268,7 +308,7 @@ class FinanceiroScreen(QWidget):
                     acao_auditoria,
                     "pagamentos_consultas",
                     f"{registro['agenda_data']}:{registro['agenda_horario']}",
-                    {"status_pagamento": self.combo_status.currentText()},
+                    {"status_pagamento": status_pagamento},
                 )
             self.carregar_dados()
             self.lbl_status.setText("Pagamento salvo com sucesso.")

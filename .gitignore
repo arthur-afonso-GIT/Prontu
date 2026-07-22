@@ -48,3 +48,6 @@ htmlcov/
 # Arquivos temporários
 *.tmp
 *.bak
+*.sql
+*.ts
+!supabase/functions/aceitar-convite/index.ts

@@ -176,6 +176,23 @@ class EquipeScreen(QWidget):
         return container
 
     def carregar_dados(self):
+        # Defesa adicional caso esta tela seja aberta por algum fluxo antigo.
+        # O menu principal ja a oculta para todos os perfis nao proprietarios.
+        try:
+            proprietario = self.db.obter_papel_atual() == "proprietario"
+        except (AttributeError, TypeError):
+            proprietario = False
+        if not proprietario:
+            self.lbl_limite.setText("A gestao da equipe e exclusiva do proprietario da clinica.")
+            self.lbl_limite.setStyleSheet("color: #b91c1c; font-weight: 600;")
+            self.tabela_membros.setRowCount(0)
+            self.tabela_convites.setRowCount(0)
+            self.input_nome.setEnabled(False)
+            self.input_email.setEnabled(False)
+            self.combo_papel.setEnabled(False)
+            self.btn_convidar.setEnabled(False)
+            return
+
         # A própria Edge Function também valida o plano. Este aviso local evita
         # que uma recusa esperada do servidor pareça um erro de carregamento.
         if not self.db.possui_recurso("equipe"):

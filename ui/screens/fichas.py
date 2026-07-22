@@ -711,7 +711,7 @@ class FichasScreen(QWidget):
 
         for indice, campo in enumerate(self.modelo_atual_campos):
             tipo = campo.get("tipo")
-            label = campo.get("label")
+            label = self._rotulo_visivel_campo(campo)
 
             # --- Linha externa: conteúdo do campo (esquerda) + ferramentas (direita) ---
             linha_container = QFrame()
@@ -1377,9 +1377,36 @@ class FichasScreen(QWidget):
         campos = []
         for campo_id, valor in respostas.items():
             tipo = "checkbox" if isinstance(valor, bool) else "texto_longo"
-            label = campo_id.replace("custom_", "").replace("_", " ").capitalize()
+            label = self._rotulo_legivel_id_campo(campo_id)
             campos.append({"tipo": tipo, "label": label, "id": campo_id})
         return campos
+
+    @staticmethod
+    def _rotulo_legivel_id_campo(campo_id):
+        """Converte um identificador interno em rótulo sem expor UUID ou timestamp."""
+        texto = str(campo_id or "campo").strip()
+        partes = texto.split("_")
+        if partes and partes[0].casefold() == "custom":
+            partes.pop(0)
+            if partes and (
+                re.fullmatch(r"[0-9a-fA-F]{8}", partes[0])
+                or (partes[0].isdigit() and len(partes[0]) >= 8)
+            ):
+                partes.pop(0)
+        rotulo = " ".join(parte for parte in partes if parte).strip()
+        return (rotulo or "Campo").capitalize()
+
+    @classmethod
+    def _rotulo_visivel_campo(cls, campo):
+        """Preserva o título cadastrado e remove um ID antigo anexado ao seu início."""
+        label = str(campo.get("label") or "").strip()
+        campo_id = str(campo.get("id") or "")
+        partes_id = campo_id.split("_")
+        if len(partes_id) >= 3 and partes_id[0].casefold() == "custom":
+            identificador = partes_id[1]
+            if label.casefold().startswith(f"{identificador.casefold()} "):
+                label = label[len(identificador):].strip()
+        return label or cls._rotulo_legivel_id_campo(campo_id)
 
     def _preencher_formulario_com_respostas(self, respostas):
         for campo_id, valor in respostas.items():
@@ -1431,7 +1458,7 @@ class FichasScreen(QWidget):
         
         for campo in self.modelo_atual_campos:
             tipo = campo.get("tipo")
-            label = campo.get("label")
+            label = self._rotulo_visivel_campo(campo)
             id_campo = campo.get("id")
             
             if tipo == "secao":
@@ -1552,7 +1579,10 @@ class FichasScreen(QWidget):
             self.exibir_popup("aviso", "Selecione o paciente", "Selecione um paciente antes de exportar a ficha.")
             return None
 
-        rotulos = {campo.get("id"): campo.get("label", campo.get("id", "")) for campo in self.modelo_atual_campos}
+        rotulos = {
+            campo.get("id"): self._rotulo_visivel_campo(campo)
+            for campo in self.modelo_atual_campos
+        }
         respostas = []
         for campo_id, (tipo, widget) in self.widgets_dinamicos.items():
             if tipo in ("texto_curto", "numero"):
@@ -1569,7 +1599,9 @@ class FichasScreen(QWidget):
             else:
                 valor = ""
             if valor:
-                respostas.append((rotulos.get(campo_id, campo_id.replace("_", " ").capitalize()), valor))
+                respostas.append(
+                    (rotulos.get(campo_id, self._rotulo_legivel_id_campo(campo_id)), valor)
+                )
 
         profissional = self.db.obter_nome_profissional() if hasattr(self.db, "obter_nome_profissional") else ""
         clinica = getattr(getattr(self.db, "session_manager", None), "nome_clinica", None) or "Prontu"

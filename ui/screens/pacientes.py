@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, 
                                QComboBox, QDateEdit, QHeaderView, QFrame, QTextEdit, QMessageBox, 
                                QListWidget, QListWidgetItem, QDialog, QScrollArea, QCalendarWidget,
-                               QFileDialog, QCheckBox)
+                               QFileDialog, QCheckBox, QSizePolicy)
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor
 from ui.design_system import definir_variante
@@ -439,7 +439,9 @@ class PacientesScreen(QWidget):
         # --- COLUNA DA DIREITA: FORMULÁRIO DE CADASTRO ---
         self.right_container = QFrame()
         self.right_container.setObjectName("FormCard")
-        self.right_container.setFixedWidth(420)
+        self.right_container.setMinimumWidth(360)
+        self.right_container.setMaximumWidth(420)
+        self.right_container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         
         right_layout = QVBoxLayout(self.right_container)
         right_layout.setContentsMargins(15, 15, 15, 15)
@@ -999,7 +1001,7 @@ class PacientesScreen(QWidget):
             motivo = str(retorno.get("motivo") or "").strip()
             icone = {"Pendente": "🟠", "Agendado": "🔵", "Concluído": "🟢", "Não retornou": "🔴", "Cancelado": "⚪"}.get(status, "•")
             texto = f"{icone} {data_texto} — {status}"
-            if motivo and motivo != "Retorno criado após consulta realizada":
+            if motivo and not motivo.startswith("Retorno criado após consulta realizada"):
                 texto += f" | {motivo}"
             item = QListWidgetItem(texto)
             item.setData(Qt.ItemDataRole.UserRole, retorno)

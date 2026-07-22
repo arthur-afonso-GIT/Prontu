@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from services.backup_crypto import (
+    BackupIntegrityError,
     build_backup_document,
     default_backup_filename,
     read_encrypted_backup,
@@ -37,6 +38,7 @@ RESTORE_INSERT_ORDER = [
     "pagamentos_consultas",
 ]
 RESTORE_DELETE_ORDER = list(reversed(RESTORE_INSERT_ORDER))
+SOFT_DELETE_TABLES = {"pacientes", "fichas_preenchidas"}
 
 ProgressCallback = Callable[[str], None]
 
@@ -181,6 +183,26 @@ class BackupService:
         stats = {"inserted": 0, "skipped": 0, "removed": 0}
         tables_data = document.get("tables") or {}
         if replace_existing:
+            ausentes = [table for table in BACKUP_TABLES if table not in tables_data]
+            if ausentes:
+                raise BackupIntegrityError(
+                    "O backup está incompleto e não pode substituir os dados atuais."
+                )
+            for table in BACKUP_TABLES:
+                if not isinstance(tables_data.get(table), list):
+                    raise BackupIntegrityError(
+                        f"Os dados de {table} estão em formato inválido."
+                    )
+                if any(not isinstance(row, dict) for row in tables_data[table]):
+                    raise BackupIntegrityError(
+                        f"Os registros de {table} estão em formato inválido."
+                    )
+            for table in SOFT_DELETE_TABLES:
+                if any(row.get("id") is None for row in tables_data[table]):
+                    raise BackupIntegrityError(
+                        f"O backup não identifica corretamente os registros de {table}."
+                    )
+        if replace_existing:
             # A senha já foi validada acima. Só então os dados atuais são removidos.
             for table in RESTORE_DELETE_ORDER:
                 if on_progress:
@@ -188,18 +210,48 @@ class BackupService:
                 try:
                     existentes = (
                         self.db.supabase.table(table)
-                        .select("consultorio_id")
+                        .select("id,consultorio_id")
                         .eq("consultorio_id", self.db.consultorio_id)
                         .execute()
                     )
-                    (
-                        self.db.supabase.table(table)
-                        .delete()
-                        .eq("consultorio_id", self.db.consultorio_id)
-                        .execute()
-                    )
-                    stats["removed"] += len(existentes.data or [])
+                    if table in SOFT_DELETE_TABLES:
+                        ids_backup = {
+                            row["id"] for row in tables_data.get(table, [])
+                        }
+                        auth_user_id = None
+                        if hasattr(self.db, "obter_auth_user_id_atual"):
+                            auth_user_id = self.db.obter_auth_user_id_atual()
+                        payload_exclusao = {
+                            "deleted_at": datetime.now(timezone.utc).isoformat(),
+                            "deleted_by": auth_user_id,
+                        }
+                        removidos_tabela = 0
+                        # Pacientes e fichas usam exclusão lógica por
+                        # segurança. Arquivamos apenas o que não existe no
+                        # backup; registros que serão restaurados continuam
+                        # visíveis para o UPSERT sob as regras de RLS.
+                        for existente in existentes.data or []:
+                            if existente.get("id") in ids_backup:
+                                continue
+                            (
+                                self.db.supabase.table(table)
+                                .update(payload_exclusao)
+                                .eq("consultorio_id", self.db.consultorio_id)
+                                .eq("id", existente["id"])
+                                .execute()
+                            )
+                            removidos_tabela += 1
+                    else:
+                        (
+                            self.db.supabase.table(table)
+                            .delete()
+                            .eq("consultorio_id", self.db.consultorio_id)
+                            .execute()
+                        )
+                        removidos_tabela = len(existentes.data or [])
+                    stats["removed"] += removidos_tabela
                 except Exception as exc:
+                    print(f"Falha ao preparar substituição em {table}: {exc}")
                     raise RuntimeError(
                         f"Não foi possível preparar a substituição dos dados ({table})."
                     ) from exc
@@ -220,9 +272,19 @@ class BackupService:
                     payload.pop("deleted_at", None)
                     payload.pop("deleted_by", None)
                 try:
-                    self.db.supabase.table(table).insert(payload).execute()
+                    if replace_existing and table in SOFT_DELETE_TABLES:
+                        self.db.supabase.table(table).upsert(
+                            payload, on_conflict="id"
+                        ).execute()
+                    else:
+                        self.db.supabase.table(table).insert(payload).execute()
                     stats["inserted"] += 1
-                except Exception:
+                except Exception as exc:
+                    if replace_existing:
+                        print(f"Falha ao restaurar {table}: {exc}")
+                        raise RuntimeError(
+                            f"Não foi possível restaurar os dados de {table}."
+                        ) from exc
                     stats["skipped"] += 1
 
         # Storage restoration is additive: existing objects are never

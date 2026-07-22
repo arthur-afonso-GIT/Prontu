@@ -91,6 +91,7 @@ class Database:
         self.supabase: Client | None = None
         self.session_manager: SessionManager | None = None
         self.consultorio_id: int | None = None
+        self.ultimo_erro_funcao: str | None = None
         self._secure_storage = SecureStorage()
 
         if self.supabase_url and self.supabase_key:
@@ -283,7 +284,9 @@ class Database:
         }
 
     def _chamar_funcao_auth(self, nome: str, corpo: dict, usar_sessao: bool = False) -> dict | None:
+        self.ultimo_erro_funcao = None
         if not self.supabase_url or not self.supabase_key:
+            self.ultimo_erro_funcao = "O Prontu não está conectado ao Supabase."
             return None
         token = self.supabase_key
         if usar_sessao and self.session_manager and self.session_manager.access_token:
@@ -300,16 +303,38 @@ class Database:
                 timeout=30.0,
             )
             if resposta.status_code >= 400:
+                try:
+                    conteudo = resposta.json()
+                    detalhe = (
+                        conteudo.get("error") or conteudo.get("message")
+                        if isinstance(conteudo, dict)
+                        else None
+                    )
+                except ValueError:
+                    detalhe = None
+                self.ultimo_erro_funcao = str(
+                    detalhe or "O servidor não conseguiu concluir a solicitação."
+                )
+                print(
+                    f"Função {nome} recusou a solicitação "
+                    f"(HTTP {resposta.status_code}): {self.ultimo_erro_funcao}"
+                )
                 return None
             dados = resposta.json()
             return dados if isinstance(dados, dict) else None
         except (httpx.HTTPError, ValueError) as erro:
-            print(f"Erro na função {nome} ({type(erro).__name__}).")
+            self.ultimo_erro_funcao = "Não foi possível comunicar com o Supabase."
+            print(f"Erro na função {nome} ({type(erro).__name__}): {erro}")
             return None
+
+    def obter_ultimo_erro_funcao(self) -> str:
+        return self.ultimo_erro_funcao or "Não foi possível concluir a solicitação."
 
     def aceitar_convite_equipe(self, codigo: str, email: str, senha: str) -> dict | None:
         resultado = self._chamar_funcao_auth("aceitar-convite", {
-            "codigo": codigo.strip(), "email": email.strip(), "senha": senha,
+            "codigo": codigo.strip().upper(),
+            "email": email.strip().lower(),
+            "senha": senha,
         })
         return self._adotar_sessao_de_login(resultado or {}, lembrar=True)
 
@@ -483,6 +508,84 @@ class Database:
             print(f"Aviso: falha ao criar retorno ({type(erro).__name__}).")
             return False
 
+    def criar_retorno_pendente_da_consulta(
+        self, paciente_nome: str, consulta_data: str = "", consulta_hora: str = ""
+    ) -> dict | None:
+        """Cria, ou reutiliza, a decisão de retorno aberta após uma consulta concluída."""
+        paciente_nome = str(paciente_nome or "").strip()
+        if not self.supabase or self.consultorio_id is None or not paciente_nome:
+            return None
+        try:
+            paciente = (
+                self.supabase.table("pacientes")
+                .select("id, nome")
+                .eq("consultorio_id", self.consultorio_id)
+                .ilike("nome", paciente_nome)
+                .is_("deleted_at", "null")
+                .limit(1)
+                .execute()
+            )
+            if not paciente.data:
+                return None
+
+            paciente_id = int(paciente.data[0]["id"])
+            nome_cadastrado = str(paciente.data[0].get("nome") or paciente_nome)
+            origem = "Retorno criado após consulta realizada"
+            if consulta_data or consulta_hora:
+                origem += f" | {consulta_data} {consulta_hora}".rstrip()
+
+            existente = (
+                self.supabase.table("retornos_pacientes")
+                .select("id, paciente_id, data_prevista, motivo, status, criado_em")
+                .eq("consultorio_id", self.consultorio_id)
+                .eq("paciente_id", paciente_id)
+                .eq("motivo", origem)
+                .order("criado_em", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if existente.data:
+                retorno = dict(existente.data[0])
+                retorno["paciente_nome"] = nome_cadastrado
+                return retorno
+
+            # Compatibilidade com pendências criadas antes de a consulta de origem
+            # passar a ser registrada no motivo.
+            pendente_anterior = (
+                self.supabase.table("retornos_pacientes")
+                .select("id, paciente_id, data_prevista, motivo, status, criado_em")
+                .eq("consultorio_id", self.consultorio_id)
+                .eq("paciente_id", paciente_id)
+                .eq("status", "Pendente")
+                .order("criado_em", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if pendente_anterior.data:
+                retorno = dict(pendente_anterior.data[0])
+                retorno["paciente_nome"] = nome_cadastrado
+                return retorno
+
+            resposta = self.supabase.table("retornos_pacientes").insert({
+                "consultorio_id": self.consultorio_id,
+                "paciente_id": paciente_id,
+                "data_prevista": None,
+                "motivo": origem,
+                "status": "Pendente",
+            }).execute()
+            if not resposta.data:
+                return None
+            retorno = dict(resposta.data[0])
+            retorno["paciente_nome"] = nome_cadastrado
+            self.registrar_evento_auditoria(
+                "INSERT", "retornos_pacientes", retorno.get("id") or paciente_id,
+                {"origem": "consulta_realizada", "paciente_id": paciente_id},
+            )
+            return retorno
+        except Exception as erro:
+            print(f"Aviso: falha ao criar retorno da consulta ({type(erro).__name__}).")
+            return None
+
     def listar_retornos_pendentes(self, limite: int = 100) -> list[dict]:
         if not self.supabase or self.consultorio_id is None:
             return []
@@ -557,10 +660,60 @@ class Database:
             return False
 
     # --- FUNÇÕES DE CONFIGURAÇÃO ---
+    def obter_auth_user_id_atual(self):
+        sessao = getattr(self.session_manager, "_session", None) or {}
+        auth_user_id = sessao.get("auth_user_id")
+        if auth_user_id:
+            return str(auth_user_id)
+        if not self.supabase:
+            return None
+        try:
+            resposta = self.supabase.auth.get_user()
+            usuario = getattr(resposta, "user", None)
+            return str(usuario.id) if usuario and usuario.id else None
+        except Exception:
+            return None
+
+    def _nome_do_metadata_auth(self):
+        if not self.supabase:
+            return ""
+        try:
+            resposta = self.supabase.auth.get_user()
+            usuario = getattr(resposta, "user", None)
+            metadata = getattr(usuario, "user_metadata", None) or {}
+            for chave in ("nome", "full_name", "name"):
+                nome = str(metadata.get(chave) or "").strip()
+                if nome:
+                    return nome
+        except Exception:
+            pass
+        return ""
+
     def obter_nome_profissional(self):
+        """Retorna o nome individual do usuário conectado, com compatibilidade legada."""
         if not self.supabase or self.consultorio_id is None:
             return ""
         try:
+            auth_user_id = self.obter_auth_user_id_atual()
+            if auth_user_id:
+                perfil = (
+                    self.supabase.table("usuarios_consultorios")
+                    .select("nome_exibicao")
+                    .eq("consultorio_id", self.consultorio_id)
+                    .eq("auth_user_id", auth_user_id)
+                    .is_("revogado_em", "null")
+                    .maybe_single()
+                    .execute()
+                )
+                nome_individual = str((perfil.data or {}).get("nome_exibicao") or "").strip()
+                if nome_individual:
+                    return nome_individual
+
+            nome_metadata = self._nome_do_metadata_auth()
+            if nome_metadata:
+                return nome_metadata
+
+            # Compatibilidade para o proprietário que já usava a configuração antiga.
             resposta = (
                 self.supabase.table("configuracoes")
                 .select("valor")
@@ -576,16 +729,23 @@ class Database:
 
     def salvar_nome_profissional(self, nome):
         if not self.supabase or self.consultorio_id is None:
-            return
+            return False
         try:
-            payload = {
-                "consultorio_id": self.consultorio_id,
-                "chave": "nome_profissional",
-                "valor": nome.strip(),
-            }
-            self.supabase.table("configuracoes").upsert(payload).execute()
+            auth_user_id = self.obter_auth_user_id_atual()
+            if not auth_user_id:
+                return False
+            resposta = (
+                self.supabase.table("usuarios_consultorios")
+                .update({"nome_exibicao": nome.strip() or None})
+                .eq("consultorio_id", self.consultorio_id)
+                .eq("auth_user_id", auth_user_id)
+                .is_("revogado_em", "null")
+                .execute()
+            )
+            return bool(resposta.data)
         except Exception as e:
             print(f"Erro ao salvar nome profissional: {e}")
+            return False
 
     def obter_configuracao(self, chave: str, default: str = "") -> str:
         if not self.supabase or self.consultorio_id is None:
@@ -704,6 +864,27 @@ class Database:
         except Exception as e:
             print(f"Erro ao buscar nomes: {e}")
             return []
+
+    def obter_telefone_paciente_por_nome(self, nome: str) -> str:
+        """Retorna o telefone do paciente da clínica para ações manuais do WhatsApp."""
+        nome = str(nome or "").strip()
+        if not self.supabase or self.consultorio_id is None or not nome:
+            return ""
+        try:
+            resposta = (
+                self.supabase.table("pacientes")
+                .select("telefone")
+                .eq("consultorio_id", self.consultorio_id)
+                .ilike("nome", nome)
+                .is_("deleted_at", "null")
+                .limit(1)
+                .execute()
+            )
+            if resposta.data:
+                return str(resposta.data[0].get("telefone") or "").strip()
+        except Exception as e:
+            print(f"Erro ao buscar telefone do paciente: {type(e).__name__}.")
+        return ""
 
     def soft_delete_paciente(self, paciente_id: int) -> bool:
         """Exclusão lógica — preserva dados clínicos."""

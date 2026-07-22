@@ -213,12 +213,19 @@ class LoginDialog(QDialog):
         else: QMessageBox.warning(self, "Não foi possível entrar", "Confira o e-mail e a senha. No primeiro acesso, use a aba 'Usar convite'.")
 
     def aceitar_convite(self):
-        codigo, email, senha = self.codigo.text().strip(), self.email.text().strip(), self.senha.text()
+        codigo = self.codigo.text().strip().upper()
+        email = self.email.text().strip().lower()
+        senha = self.senha.text()
         if not codigo or "@" not in email or len(senha) < 8 or senha != self.confirmacao.text():
             QMessageBox.warning(self, "Dados inválidos", "Confira o código, o e-mail e as senhas. A senha deve ter ao menos 8 caracteres."); return
         if self.db.aceitar_convite_equipe(codigo, email, senha):
             QMessageBox.information(self, "Acesso criado", "Seu acesso foi criado com sucesso."); self.accept()
-        else: QMessageBox.warning(self, "Convite não aceito", "Confira o código e o e-mail. O convite pode ter expirado ou sido cancelado.")
+        else:
+            QMessageBox.warning(
+                self,
+                "Convite não aceito",
+                self.db.obter_ultimo_erro_funcao(),
+            )
 
     def ativar(self):
         if not self.db.validar_chave_acesso(self.chave.text().strip()):
