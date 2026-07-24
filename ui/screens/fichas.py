@@ -15,6 +15,11 @@ from PySide6.QtCore import Qt, QUrl, QDate
 from PySide6.QtPrintSupport import QPrinter
 from ui.design_system import definir_variante
 from utils.operacao_segura import mensagem_erro_usuario, registrar_falha
+from services.leitor_documentos import (
+    extrair_blocos_docx,
+    extrair_blocos_pdf,
+    interpretar_blocos,
+)
 
 try:
     from docx import Document
@@ -1011,53 +1016,8 @@ class FichasScreen(QWidget):
         return novos_campos
 
     def _detectar_campos_melhorado(self, linhas_texto):
-        """Interpreta estruturas frequentes de fichas Word/PDF para revisão no construtor."""
-        campos = []
-        ids = set()
-        for linha in linhas_texto:
-            texto = re.sub(r"\s+", " ", (linha or "")).strip(" -\t")
-            if not texto or len(texto) > 180:
-                continue
-
-            opcoes = re.findall(r"\(\s*\)\s*([^()]{1,35}?)(?=\s*\(\s*\)|$)", texto)
-            tem_checkbox = any(marcador in texto for marcador in ("[ ]", "☐", "□"))
-            encontrado = re.match(r"^(.{2,80}?)(?:\s*:\s*|\s*[-–]\s+|\s*[_.]{3,}\s*$)", texto)
-
-            if encontrado:
-                label = encontrado.group(1).strip(" -:;,. ")
-                texto_sem_acento = unicodedata.normalize("NFKD", label).encode("ascii", "ignore").decode("ascii")
-                campo_id = re.sub(r"[^a-z0-9]+", "_", texto_sem_acento.lower()).strip("_")
-                if not label or campo_id in ids:
-                    continue
-                ids.add(campo_id)
-                palavras = campo_id.lower()
-                if len(opcoes) >= 2:
-                    campos.append({"tipo": "multipla_escolha", "label": label, "id": campo_id, "opcoes": opcoes})
-                elif tem_checkbox:
-                    campos.append({"tipo": "checkbox", "label": label, "id": campo_id})
-                elif any(x in palavras for x in ("data", "nasc", "consulta", "atendimento")):
-                    campos.append({"tipo": "data", "label": label, "id": campo_id})
-                elif any(x in palavras for x in ("peso", "altura", "idade", "pressao", "temperatura", "frequencia", "glicemia")):
-                    campos.append({"tipo": "numero", "label": label, "id": campo_id})
-                elif any(x in palavras for x in ("qp", "hda", "conduta", "antecedentes", "historico", "medicamentos", "observacoes", "evolucao", "anamnese")):
-                    campos.append({"tipo": "texto_longo", "label": label, "id": campo_id})
-                else:
-                    campos.append({"tipo": "texto_curto", "label": label, "id": campo_id})
-            elif len(texto) <= 70:
-                # Na importacao, uma linha isolada e tratada como campo. Isso
-                # evita perder QP, HDA e outros rotulos clinicos em maiusculas.
-                label = texto.rstrip(":").strip()
-                texto_sem_acento = unicodedata.normalize("NFKD", label).encode("ascii", "ignore").decode("ascii")
-                campo_id = re.sub(r"[^a-z0-9]+", "_", texto_sem_acento.lower()).strip("_")
-                if not label or campo_id in ids:
-                    continue
-                ids.add(campo_id)
-                palavras = campo_id.lower()
-                tipo = "texto_longo" if any(
-                    x in palavras for x in ("qp", "hda", "conduta", "antecedentes", "historico", "medicamentos", "observacoes", "evolucao", "anamnese", "exame", "avaliacao")
-                ) else "texto_curto"
-                campos.append({"tipo": tipo, "label": label, "id": campo_id})
-        return campos
+        """Compatibilidade com chamadas antigas usando o novo leitor estruturado."""
+        return interpretar_blocos(linhas_texto)
 
     def _aplicar_modelo_importado(self, novos_campos, nome_arquivo):
         if novos_campos:
@@ -1079,27 +1039,11 @@ class FichasScreen(QWidget):
         if not file_path: return
             
         try:
-            doc = Document(file_path)
-            linhas_texto = []
-            
-            for p in doc.paragraphs:
-                t = p.text.strip()
-                if t: linhas_texto.append(t)
-            
-            for tabela in doc.tables:
-                for row_tab in tabela.rows:
-                    valores_celulas = [c.text.strip() for c in row_tab.cells if c.text.strip()]
-                    for val in valores_celulas:
-                        for sub_val in val.split('\n'):
-                            if sub_val.strip() and sub_val.strip() not in linhas_texto:
-                                rastro = sub_val.strip()
-                                if rastro.replace(",", "").strip():
-                                    linhas_texto.append(rastro)
-
-            if not linhas_texto:
+            blocos = extrair_blocos_docx(file_path)
+            if not blocos:
                 self.exibir_popup("aviso", "Documento sem texto", "Não encontramos texto no Word selecionado.")
                 return
-            novos_campos = self._detectar_campos_melhorado(linhas_texto)
+            novos_campos = interpretar_blocos(blocos)
             self._aplicar_modelo_importado(novos_campos, file_path)
         except Exception as e:
             registrar_falha("ler documento", e)
@@ -1118,22 +1062,14 @@ class FichasScreen(QWidget):
             return
 
         try:
-            leitor = PdfReader(file_path)
-            linhas_texto = []
-            for pagina in leitor.pages:
-                texto_pagina = pagina.extract_text() or ""
-                for linha in texto_pagina.split("\n"):
-                    linha_limpa = linha.strip()
-                    if linha_limpa:
-                        linhas_texto.append(linha_limpa)
-
-            if not linhas_texto:
+            blocos = extrair_blocos_pdf(file_path)
+            if not blocos:
                 self.exibir_popup(
                     "aviso", "PDF sem texto",
                     "Este PDF parece ser uma imagem digitalizada. Use um PDF com texto selecionável ou monte o modelo manualmente.",
                 )
                 return
-            novos_campos = self._detectar_campos_melhorado(linhas_texto)
+            novos_campos = interpretar_blocos(blocos)
             self._aplicar_modelo_importado(novos_campos, file_path)
         except Exception as e:
             registrar_falha("ler PDF", e)

@@ -19,13 +19,15 @@ The product is designed to be delivered as a Windows application. End users shou
 
 ## Core capabilities
 
-- **Patient management** — searchable patient profiles, specialty folders, clinical history, and follow-up scheduling.
+- **Patient management** — searchable profiles, specialty folders, recent-patient shortcuts, clinical history, and follow-up scheduling.
+- **Patient import** — preview and import CSV or Excel files, with options to ignore or update existing records and normalized CPF matching.
 - **Clinical records** — create, fill, edit, review, archive, and export records linked to each patient.
 - **Template builder** — create custom record models with sections, text fields, dates, numbers, checkboxes, and multiple-choice inputs.
-- **Smart agenda** — daily and weekly appointment views, conflict prevention, status tracking, and direct access to the patient record.
+- **Smart agenda** — daily and weekly calendar views, conflict prevention, custom procedures, status tracking, rescheduling, and direct access to the patient record.
 - **Financial follow-up** — appointments feed the payment panel automatically; received, pending, and overdue amounts are clearly identified.
 - **Returns and follow-ups** — schedule expected patient returns and keep the next action visible in the patient workflow.
 - **Professional exports** — generate Word and PDF documents from patient and clinical-record data.
+- **WhatsApp-assisted communication** — open a patient conversation or appointment reminder with a clinic-configured message ready for review and manual sending.
 - **Encrypted local backup** — configure a secure destination, retention policy, optional attachment metadata, and a recovery password.
 
 ## Team workspace
@@ -39,6 +41,15 @@ Prontu supports individual accounts for a shared clinic database. Each person si
 | **Secretary** | Basic patient registration and appointment management, without access to clinical records, attachments, finance, settings, or team administration. |
 
 Owners can create invitations, select the invited role, regenerate invitation codes, revoke access, and manage the number of active seats allowed by the clinic plan.
+
+## User documentation
+
+The product documentation is written in Brazilian Portuguese for clinic owners, professionals, and administrative staff:
+
+- [Windows installation guide](output/pdf/Guia_de_Instalacao_Prontu.pdf) — installation, Windows SmartScreen guidance, updates, and first access.
+- [User manual and feature guide](output/pdf/Manual_de_Uso_e_Funcionalidades_Prontu.pdf) — patients, folders, imports, appointments, clinical records, returns, finance, team access, settings, backups, and daily routines.
+
+These guides are designed for end users and do not require knowledge of Python, Supabase, or database administration.
 
 ## Screenshots
 
@@ -68,7 +79,7 @@ Owners can create invitations, select the invited role, regenerate invitation co
 | Documents | python-docx, PySide6 Qt Print Support, pypdf |
 | Local security | cryptography, keyring |
 | Connectivity and configuration | httpx, python-dotenv |
-| Windows distribution | PyInstaller-ready desktop application, designed for installer delivery |
+| Windows distribution | PyInstaller application bundle, Inno Setup installer, and optional Authenticode signing workflow |
 
 ## Architecture
 
@@ -81,9 +92,12 @@ Prontu
 │   ├── screens/            Dashboard, patients, agenda, records, finance, team and settings
 │   └── assets/             Product branding and visual assets
 ├── services/               Backup and background-work services
+├── installer/              PyInstaller and Inno Setup distribution definitions
+├── scripts/                Build, packaging and release support scripts
+├── output/pdf/             End-user product documentation
 ├── supabase/
 │   ├── migrations/         PostgreSQL schema, Row Level Security policies and database evolution
-│   └── functions/          Activation, login, password reset and team-management APIs
+│   └── functions/          Activation, login, password reset, team and messaging APIs
 └── tests/                  Automated regression checks
 ```
 
@@ -97,6 +111,7 @@ The desktop interface communicates with Supabase through a small Python data lay
 - Audit history records operational events without exposing clinical content in the audit interface.
 - Device activation and session handling keep privileged database credentials out of the desktop application.
 - Local backup files are encrypted and can be protected with a recovery password.
+- Production builds can require executable and installer signatures when a trusted code-signing certificate is available.
 
 Prontu provides technical safeguards for a small-practice workflow. Legal compliance, privacy policies, retention rules, and operational procedures must be defined by each clinic before production use.
 
