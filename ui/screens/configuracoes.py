@@ -6,10 +6,11 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QFrame, QMessageBox,
                                QComboBox, QCheckBox, QFileDialog, QInputDialog,
                                QSpinBox, QDialog, QTableWidget, QTableWidgetItem,
-                               QHeaderView, QTextEdit)
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction
+                               QHeaderView, QTextEdit, QScrollArea)
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QAction, QDesktopServices
 from ui.design_system import definir_variante
+from utils.diagnostics import log_file_path
 
 from services.backup_crypto import BackupCryptoError, BackupIntegrityError
 from services.backup_service import BackupService
@@ -24,6 +25,15 @@ MENSAGEM_LEMBRETE_CONSULTA_PADRAO = (
     "Olá, {paciente}! Lembramos que sua consulta está marcada para {data} às {hora}. "
     "Procedimento: {procedimento}. Por favor, confirme sua presença."
 )
+
+
+def validar_senhas_backup(senha: str, confirmacao: str) -> tuple[bool, str]:
+    """Valida os dois campos antes de iniciar um backup criptografado."""
+    if not senha or not confirmacao:
+        return False, "Informe e confirme a senha de recuperação."
+    if senha != confirmacao:
+        return False, "A senha e a confirmação não coincidem."
+    return True, ""
 
 
 class MensagensWhatsAppDialog(QDialog):
@@ -94,6 +104,19 @@ class MensagensWhatsAppDialog(QDialog):
         ok_lembrete = self.db.salvar_configuracao("whatsapp_mensagem_lembrete", lembrete)
         if not (ok_manual and ok_lembrete):
             QMessageBox.warning(self, "Não foi possível salvar", "As mensagens não foram salvas. Tente novamente.")
+            return
+        valores_confirmados = self.db.obter_configuracoes([
+            "whatsapp_mensagem_manual", "whatsapp_mensagem_lembrete",
+        ])
+        if (
+            valores_confirmados.get("whatsapp_mensagem_manual") != manual
+            or valores_confirmados.get("whatsapp_mensagem_lembrete") != lembrete
+        ):
+            QMessageBox.warning(
+                self,
+                "Não foi possível confirmar",
+                "O Prontu não conseguiu confirmar as mensagens salvas. Tente novamente.",
+            )
             return
         self.accept()
 
@@ -458,17 +481,36 @@ class ConfiguracoesScreen(QWidget):
             os.path.expanduser("~"), "Documents", "Prontu Backups"
         )
         
-        # Layout Principal com margens confortáveis
-        main_layout = QVBoxLayout(self)
+        # A tela inteira precisa rolar em resolucoes menores. Isso impede que
+        # cartoes e botoes sejam comprimidos ou sobrepostos ao alternar entre
+        # janela normal e maximizada.
+        layout_raiz = QVBoxLayout(self)
+        layout_raiz.setContentsMargins(0, 0, 0, 0)
+        area_rolagem = QScrollArea()
+        area_rolagem.setObjectName("ConfiguracoesScroll")
+        area_rolagem.setWidgetResizable(True)
+        area_rolagem.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        area_rolagem.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        area_rolagem.setFrameShape(QFrame.Shape.NoFrame)
+
+        conteudo_rolagem = QWidget()
+        conteudo_rolagem.setObjectName("ConfiguracoesConteudo")
+        main_layout = QVBoxLayout(conteudo_rolagem)
         main_layout.setContentsMargins(24, 24, 24, 24)
         main_layout.setSpacing(18)
+        area_rolagem.setWidget(conteudo_rolagem)
+        layout_raiz.addWidget(area_rolagem)
         
         # --- CABEÇALHO ---
         lbl_titulo = QLabel("⚙️ Configurações do Sistema")
+        lbl_titulo.setWordWrap(True)
+        lbl_titulo.setMinimumWidth(0)
         lbl_titulo.setStyleSheet("font-size: 24px; font-weight: bold; color: #0f172a;")
         main_layout.addWidget(lbl_titulo)
         
         lbl_subtitulo = QLabel("Personalize os dados do aplicativo que serão exibidos nas telas e relatórios.")
+        lbl_subtitulo.setWordWrap(True)
+        lbl_subtitulo.setMinimumWidth(0)
         lbl_subtitulo.setStyleSheet("font-size: 14px; color: #64748b; margin-bottom: 10px;")
         main_layout.addWidget(lbl_subtitulo)
 
@@ -589,6 +631,32 @@ class ConfiguracoesScreen(QWidget):
         lembretes_layout.addWidget(btn_lembretes)
         main_layout.addWidget(container_lembretes)
 
+        # --- SUPORTE E DIAGNÓSTICO LOCAL ---
+        container_diagnostico = QFrame()
+        container_diagnostico.setObjectName("FormCard")
+        diagnostico_layout = QHBoxLayout(container_diagnostico)
+        diagnostico_layout.setContentsMargins(20, 16, 20, 16)
+        diagnostico_layout.setSpacing(14)
+        texto_diagnostico = QVBoxLayout()
+        titulo_diagnostico = QLabel("Diagnóstico para suporte")
+        titulo_diagnostico.setStyleSheet(
+            "font-size: 16px; font-weight: bold; color: #0f172a;"
+        )
+        descricao_diagnostico = QLabel(
+            "Abra a pasta de diagnóstico quando o suporte solicitar. "
+            "Os arquivos permanecem disponíveis após atualizar o Prontu."
+        )
+        descricao_diagnostico.setWordWrap(True)
+        descricao_diagnostico.setStyleSheet("color: #64748b; font-size: 12px;")
+        texto_diagnostico.addWidget(titulo_diagnostico)
+        texto_diagnostico.addWidget(descricao_diagnostico)
+        diagnostico_layout.addLayout(texto_diagnostico, 1)
+        btn_diagnostico = QPushButton("Abrir pasta de diagnóstico")
+        definir_variante(btn_diagnostico, "secondary")
+        btn_diagnostico.clicked.connect(self._abrir_pasta_diagnostico)
+        diagnostico_layout.addWidget(btn_diagnostico)
+        main_layout.addWidget(container_diagnostico)
+
         # --- PAINEL DE BACKUP LOCAL CRIPTOGRAFADO ---
         container_backup = QFrame()
         container_backup.setObjectName("FormCard")
@@ -638,9 +706,29 @@ class ConfiguracoesScreen(QWidget):
         senha_row.addWidget(QLabel("Senha de recuperação:"))
         self.input_backup_senha = QLineEdit()
         configurar_visibilidade_senha(self.input_backup_senha)
-        self.input_backup_senha.setPlaceholderText("Defina e confirme ao executar backup")
+        self.input_backup_senha.setPlaceholderText("Defina a senha do backup")
         senha_row.addWidget(self.input_backup_senha)
         backup_layout.addLayout(senha_row)
+
+        confirmar_senha_row = QHBoxLayout()
+        confirmar_senha_row.addWidget(QLabel("Confirmar senha:"))
+        self.input_backup_senha_confirmacao = QLineEdit()
+        configurar_visibilidade_senha(self.input_backup_senha_confirmacao)
+        self.input_backup_senha_confirmacao.setPlaceholderText("Digite novamente a mesma senha")
+        confirmar_senha_row.addWidget(self.input_backup_senha_confirmacao)
+        backup_layout.addLayout(confirmar_senha_row)
+
+        self.chk_mostrar_senhas_backup = QCheckBox("Mostrar as senhas digitadas")
+        self.chk_mostrar_senhas_backup.toggled.connect(
+            self._definir_senhas_backup_visiveis
+        )
+        backup_layout.addWidget(self.chk_mostrar_senhas_backup)
+
+        aviso_senha = QLabel(
+            "Guarde esta senha: ela será necessária para restaurar o backup."
+        )
+        aviso_senha.setStyleSheet("color: #64748b; font-size: 12px;")
+        backup_layout.addWidget(aviso_senha)
 
         self.lbl_backup_status = QLabel("Último backup: nunca executado")
         self.lbl_backup_status.setWordWrap(True)
@@ -667,12 +755,32 @@ class ConfiguracoesScreen(QWidget):
 
         main_layout.addWidget(container_backup)
         main_layout.addStretch()
+        main_layout.activate()
+        conteudo_rolagem.setMinimumHeight(main_layout.sizeHint().height())
         
         # Executa a busca inicial de dados para preencher a tela
         self.carregar_dados_configurados()
 
     def _abrir_seletor_pasta_backup(self, event):
         self._escolher_pasta_backup()
+
+    def _abrir_pasta_diagnostico(self):
+        pasta = log_file_path().parent
+        try:
+            pasta.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            QMessageBox.warning(
+                self,
+                "Diagnóstico indisponível",
+                "Não foi possível preparar a pasta de diagnóstico neste computador.",
+            )
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(pasta))):
+            QMessageBox.warning(
+                self,
+                "Diagnóstico indisponível",
+                f"Não foi possível abrir a pasta automaticamente.\n\nCaminho: {pasta}",
+            )
 
     def abrir_historico_auditoria(self):
         if not self.db or not self.db.supabase:
@@ -696,6 +804,15 @@ class ConfiguracoesScreen(QWidget):
             return getattr(self.window_principal.screen_fichas, "_formulario_sujo", False)
         return False
 
+    def _definir_senhas_backup_visiveis(self, mostrar: bool):
+        modo = (
+            QLineEdit.EchoMode.Normal
+            if mostrar
+            else QLineEdit.EchoMode.Password
+        )
+        self.input_backup_senha.setEchoMode(modo)
+        self.input_backup_senha_confirmacao.setEchoMode(modo)
+
     def _executar_backup_manual(self):
         if not self.db:
             return
@@ -707,15 +824,13 @@ class ConfiguracoesScreen(QWidget):
             return
         dest = self.input_backup_dir.text().strip()
         senha = self.input_backup_senha.text()
-        if not dest or not senha:
-            QMessageBox.warning(self, "Campos obrigatórios", "Informe pasta e senha de recuperação.")
+        confirmacao_senha = self.input_backup_senha_confirmacao.text()
+        if not dest:
+            QMessageBox.warning(self, "Pasta obrigatória", "Escolha a pasta onde o backup será salvo.")
             return
-        confirm = QMessageBox.question(
-            self, "Confirmar senha",
-            "Confirme que memorizou a senha. Sem ela a restauração será impossível.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
+        senhas_validas, mensagem = validar_senhas_backup(senha, confirmacao_senha)
+        if not senhas_validas:
+            QMessageBox.warning(self, "Confira a senha", mensagem)
             return
 
         self.db.salvar_configuracao("backup_dir", dest)
@@ -744,6 +859,8 @@ class ConfiguracoesScreen(QWidget):
 
     def _on_backup_ok(self, result: dict):
         self.btn_backup_agora.setEnabled(True)
+        self.input_backup_senha.clear()
+        self.input_backup_senha_confirmacao.clear()
         size_kb = result.get("size_bytes", 0) // 1024
         self.lbl_backup_status.setText(
             f"Último backup: {result.get('created_at', '')}\n"

@@ -1,11 +1,12 @@
 import os
 import sys
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
-                               QPushButton, QStackedWidget, QLabel, QFrame)
+                               QPushButton, QStackedWidget, QLabel, QFrame,
+                               QScrollArea)
 from PySide6.QtCore import Qt, QEvent, QTimer
 
 from ui.screens.home import HomeScreen
-from ui.screens.pacientes import PacientesScreen
+from ui.screens.pacientes import PacientesScreen, normalizar_nome_pasta
 from ui.screens.agenda import AgendaScreen 
 from ui.screens.configuracoes import ConfiguracoesScreen
 from ui.screens.financeiro import FinanceiroScreen
@@ -25,6 +26,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Prontu — Gerenciamento Inteligente")
         self.resize(1200, 750)
+        self.setMinimumSize(900, 600)
         self._layout_refresh_timer = QTimer(self)
         self._layout_refresh_timer.setSingleShot(True)
         self._layout_refresh_timer.timeout.connect(self._recalcular_layout_visivel)
@@ -48,6 +50,7 @@ class MainWindow(QMainWindow):
         
         # --- 1. SIDEBAR LATERAL DE NAVEGAÇÃO ---
         sidebar = QFrame()
+        self.sidebar = sidebar
         sidebar.setObjectName("SidebarProntu")
         sidebar.setFixedWidth(240)
         sidebar.setStyleSheet("""
@@ -171,6 +174,7 @@ class MainWindow(QMainWindow):
         
         # Define a tela padrão inicial (Home)
         self.mudar_tela(0, self.btn_home)
+        self._atualizar_sidebar_responsiva()
 
     def mudar_tela(self, indice, botao_ativo):
         """Muda o painel visível, atualiza o estado visual do botão selecionado
@@ -239,6 +243,7 @@ class MainWindow(QMainWindow):
 
     def _recalcular_layout_visivel(self):
         """Corrige geometrias antigas que o Windows pode manter após maximizar."""
+        self._atualizar_sidebar_responsiva()
         central = self.centralWidget()
         atual = self.painel_telas.currentWidget() if hasattr(self, "painel_telas") else None
         for widget in (central, getattr(self, "painel_telas", None), atual):
@@ -250,6 +255,30 @@ class MainWindow(QMainWindow):
                 layout.invalidate()
                 layout.activate()
             widget.update()
+
+        # Areas rolaveis possuem uma arvore de geometrias propria. Atualiza-las
+        # explicitamente evita que conservem a largura/altura da janela anterior.
+        if atual is not None:
+            if hasattr(atual, "_ajustar_altura_formulario"):
+                atual._ajustar_altura_formulario()
+            for area in atual.findChildren(QScrollArea):
+                conteudo = area.widget()
+                if conteudo is not None:
+                    conteudo.updateGeometry()
+                    layout = conteudo.layout()
+                    if layout is not None:
+                        layout.invalidate()
+                        layout.activate()
+                area.viewport().update()
+
+    def _atualizar_sidebar_responsiva(self):
+        """Libera mais espaco para o conteudo em janelas de largura reduzida."""
+        sidebar = getattr(self, "sidebar", None)
+        if sidebar is None:
+            return
+        largura = 200 if self.width() < 1250 else 240
+        if sidebar.width() != largura:
+            sidebar.setFixedWidth(largura)
 
     def resizeEvent(self, evento):
         super().resizeEvent(evento)
@@ -263,12 +292,17 @@ class MainWindow(QMainWindow):
         super().changeEvent(evento)
         if evento.type() == QEvent.Type.WindowStateChange:
             self._agendar_recalculo_layout(80)
+            # No Windows a geometria final do modo maximizado pode chegar depois
+            # do primeiro evento. Uma segunda passagem curta estabiliza o layout.
+            QTimer.singleShot(220, self._recalcular_layout_visivel)
 
     def navegar_para_novo_paciente(self):
         """Callback do botão 'Novo Paciente' da Home: limpa o formulário e vai para a aba de Pacientes."""
-        if hasattr(self.screen_pacientes, 'limpar_formulario'):
-            self.screen_pacientes.limpar_formulario()
         self.mudar_tela(1, self.btn_pacientes)
+        if hasattr(self.screen_pacientes, 'preparar_novo_paciente'):
+            self.screen_pacientes.preparar_novo_paciente("Geral")
+        elif hasattr(self.screen_pacientes, 'limpar_formulario'):
+            self.screen_pacientes.limpar_formulario()
 
     def abrir_paciente_especifico(self, paciente_id):
         """Vai para a aba Pacientes e já abre o prontuário de um paciente específico
@@ -337,16 +371,48 @@ class MainWindow(QMainWindow):
                 .order("nome")\
                 .execute()
             
-            pastas_atuais = [row["nome"].strip() for row in resposta.data if (row.get("nome") or "").strip()]
+            pastas_atuais = [
+                normalizar_nome_pasta(row.get("nome"))
+                for row in (resposta.data or [])
+                if normalizar_nome_pasta(row.get("nome"))
+            ]
             self.pastas_cores = {
-                row["nome"].strip(): (row.get("cor") or "#0284c7")
-                for row in resposta.data if (row.get("nome") or "").strip()
+                normalizar_nome_pasta(row.get("nome")): (row.get("cor") or "#0284c7")
+                for row in (resposta.data or []) if normalizar_nome_pasta(row.get("nome"))
             }
-            if pastas_atuais:
-                return pastas_atuais
+
+            # Recupera tambem pastas presentes em pacientes antigos ou vindos
+            # de importacao. Assim nenhuma pasta some da Home apenas porque o
+            # cadastro auxiliar ficou desatualizado.
+            resposta_pacientes = self.db.supabase.table("pacientes")\
+                .select("pasta")\
+                .eq("consultorio_id", self.db.consultorio_id)\
+                .is_("deleted_at", "null")\
+                .execute()
+            pastas_atuais.extend(
+                normalizar_nome_pasta(row.get("pasta")) or "Geral"
+                for row in (resposta_pacientes.data or [])
+            )
+
+            unicas = {}
+            for pasta in ["Geral", *pastas_atuais]:
+                nome = normalizar_nome_pasta(pasta) or "Geral"
+                unicas.setdefault(nome.casefold(), nome)
+                self.pastas_cores.setdefault(nome, "#0284c7")
+            return sorted(unicas.values(), key=lambda nome: (nome.casefold() != "geral", nome.casefold()))
         except Exception as e:
             print(f"Erro ao carregar pastas: {e}")
         return ["Geral"]
+
+    def recarregar_pastas_sistema(self):
+        """Reconcilia pastas e pacientes e atualiza imediatamente Home e formulário."""
+        self.pastas_sistema = self.carregar_pastas_sqlite()
+        if hasattr(self.screen_pacientes, "pastas_cores"):
+            self.screen_pacientes.pastas_cores = self.pastas_cores
+        if hasattr(self.screen_pacientes, "atualizar_combobox_pastas"):
+            self.screen_pacientes.atualizar_combobox_pastas(self.pastas_sistema)
+        if hasattr(self.screen_home, "renderizar_lista_pastas"):
+            self.screen_home.renderizar_lista_pastas(force=True)
 
     def sincronizar_pastas_sistema(self, nova_lista):
         """Persiste a nova lista de pastas no Supabase e propaga a atualização

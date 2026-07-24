@@ -1,13 +1,44 @@
 import os
 import sys
+from pathlib import Path
 
 # 1. Carrega as variáveis de ambiente do arquivo .env imediatamente
 from dotenv import load_dotenv
-load_dotenv(override=True)
+from utils.diagnostics import configure_diagnostics
+
+_PASTA_APLICACAO = os.path.abspath(os.path.dirname(__file__))
+_PASTA_RECURSOS = getattr(sys, "_MEIPASS", _PASTA_APLICACAO)
+_CONFIG_PUBLICA = os.path.join(_PASTA_RECURSOS, "prontu_public.env")
+_CONFIG_DESENVOLVIMENTO = os.path.join(_PASTA_APLICACAO, ".env")
+
+
+def _ler_versao() -> str:
+    candidatos = (
+        Path(_PASTA_RECURSOS) / "VERSION",
+        Path(_PASTA_APLICACAO) / "VERSION",
+    )
+    for caminho in candidatos:
+        try:
+            versao = caminho.read_text(encoding="utf-8").strip()
+            if versao:
+                return versao
+        except OSError:
+            continue
+    return "desconhecida"
+
+
+APP_VERSION = _ler_versao()
+logger = configure_diagnostics(APP_VERSION)
+
+if os.path.isfile(_CONFIG_PUBLICA):
+    load_dotenv(_CONFIG_PUBLICA, override=False, encoding="utf-8-sig")
+if os.path.isfile(_CONFIG_DESENVOLVIMENTO):
+    load_dotenv(_CONFIG_DESENVOLVIMENTO, override=True, encoding="utf-8-sig")
 
 # Garante que o diretório atual está no PATH do Python
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox, QDialog
 from database import Database
 from ui.login_dialog import LoginDialog
@@ -29,7 +60,7 @@ def _importar_main_window():
 
     # Tentativa 1: import padrão (caminho normal, mais rápido)
     try:
-        from main_window import MainWindow
+        from ui.main_window import MainWindow
         return MainWindow
     except ModuleNotFoundError:
         pass
@@ -114,12 +145,22 @@ def _carregar_modulo_main_window(caminho_arquivo):
 
 
 def inicializar_sistema():
+    logger.info("Inicializando interface")
     app = QApplication(sys.argv)
+    app.setApplicationName("Prontu")
+    app.setOrganizationName("Prontu")
+    caminho_icone = os.path.join(_PASTA_RECURSOS, "ui", "assets", "prontu_logo.png")
+    if os.path.isfile(caminho_icone):
+        app.setWindowIcon(QIcon(caminho_icone))
     instalar_design_system(app)
     instalar_feedback_interativo(app)
     
     # Inicializa o banco de dados principal
-    db = Database()
+    try:
+        db = Database()
+    except Exception:
+        logger.exception("Falha ao inicializar banco e sessão")
+        raise
     
     # Se não houver sessão autenticada, solicita a chave
     while not db.esta_autenticado():
@@ -178,7 +219,9 @@ def inicializar_sistema():
     janela = MainWindow(db)
     janela.show()
     
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    logger.info("Aplicativo encerrado | código=%s", exit_code)
+    sys.exit(exit_code)
 
 if __name__ == "__main__":
     inicializar_sistema()

@@ -6,8 +6,8 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, 
                                QComboBox, QDateEdit, QHeaderView, QFrame, QTextEdit, QMessageBox, 
                                QListWidget, QListWidgetItem, QDialog, QScrollArea, QCalendarWidget,
-                               QFileDialog, QCheckBox, QSizePolicy)
-from PySide6.QtCore import Qt, QDate
+                               QFileDialog, QCheckBox, QSizePolicy, QGridLayout)
+from PySide6.QtCore import Qt, QDate, QEvent, QTimer
 from PySide6.QtGui import QColor
 from ui.design_system import definir_variante
 from utils.operacao_segura import (
@@ -40,6 +40,32 @@ def normalizar_nome_pasta(valor):
 def normalizar_cpf(valor):
     """Mantém somente os números do CPF para salvar e comparar."""
     return "".join(caractere for caractere in str(valor or "") if caractere.isdigit())[:11]
+
+
+def normalizar_texto_busca(valor):
+    """Normaliza maiusculas e acentos para comparar nomes de forma previsivel."""
+    texto = unicodedata.normalize("NFKD", str(valor or "").strip().casefold())
+    return "".join(caractere for caractere in texto if not unicodedata.combining(caractere))
+
+
+def paciente_corresponde_busca(paciente, texto):
+    """Filtra o nome pelo inicio e documentos/telefone pelos numeros digitados."""
+    termo = normalizar_texto_busca(texto)
+    if not termo:
+        return True
+
+    nome = normalizar_texto_busca(paciente.get("nome"))
+    if nome.startswith(termo):
+        return True
+
+    numeros = "".join(caractere for caractere in termo if caractere.isdigit())
+    if not numeros:
+        return False
+
+    return any(
+        numeros in "".join(caractere for caractere in str(paciente.get(campo) or "") if caractere.isdigit())
+        for campo in ("telefone", "cpf", "rg")
+    )
 
 
 def formatar_cpf(valor):
@@ -364,6 +390,7 @@ class ImportarPacientesDialog(QDialog):
             finalizar_operacao(self.btn_importar)
 
         self.tela_pacientes.carregar_pacientes_tabela()
+        self.tela_pacientes._atualizar_home_apos_mutacao()
         if falhas:
             self._mensagem(QMessageBox.Icon.Warning, "Importação parcialmente concluída", f"{adicionados} adicionado(s) e {atualizados_ok} atualizado(s). Ocorreu uma falha; confira os dados e tente novamente.")
             return
@@ -396,26 +423,25 @@ class PacientesScreen(QWidget):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(12)
         
-        filter_layout = QHBoxLayout()
+        self.filter_layout = QGridLayout()
+        self.filter_layout.setContentsMargins(0, 0, 0, 0)
+        self.filter_layout.setHorizontalSpacing(12)
+        self.filter_layout.setVerticalSpacing(8)
         
         self.input_busca = QLineEdit()
         self.input_busca.setPlaceholderText("🔍 Buscar paciente por nome, CPF, RG ou telefone...")
         self.input_busca.textChanged.connect(self.filtrar_pacientes)
-        filter_layout.addWidget(self.input_busca)
         
         self.combo_filtro_pasta = QComboBox()
         self.combo_filtro_pasta.addItem("📁 Todas as Pastas")
         self.combo_filtro_pasta.setMinimumWidth(170)
         self.combo_filtro_pasta.currentTextChanged.connect(self.filtrar_pacientes)
-        filter_layout.addWidget(self.combo_filtro_pasta)
 
         self.btn_importar_pacientes = QPushButton("Importar pacientes")
         self.btn_importar_pacientes.setToolTip("Importe uma planilha CSV ou Excel com pacientes já cadastrados")
         definir_variante(self.btn_importar_pacientes, "secondary")
         self.btn_importar_pacientes.clicked.connect(self.abrir_importador_pacientes)
-        filter_layout.addWidget(self.btn_importar_pacientes)
-
-        left_layout.addLayout(filter_layout)
+        left_layout.addLayout(self.filter_layout)
         
         self.tabela = QTableWidget()
         self.tabela.setColumnCount(6)
@@ -440,12 +466,15 @@ class PacientesScreen(QWidget):
         self.right_container = QFrame()
         self.right_container.setObjectName("FormCard")
         self.right_container.setMinimumWidth(360)
-        self.right_container.setMaximumWidth(420)
-        self.right_container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        self.right_container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         
         right_layout = QVBoxLayout(self.right_container)
         right_layout.setContentsMargins(15, 15, 15, 15)
         right_layout.setSpacing(6)
+        # O formulario nunca pode ser comprimido verticalmente. Quando a
+        # janela fica menor, a QScrollArea deve rolar em vez de sobrepor
+        # rotulos, campos e botoes.
+        self.right_layout = right_layout
         
         self.lbl_form_titulo = QLabel("👤 Novo Prontuário Clínico")
         self.lbl_form_titulo.setStyleSheet("font-size: 15px; font-weight: bold; color: #0f172a; padding-bottom: 2px;")
@@ -669,9 +698,89 @@ class PacientesScreen(QWidget):
         self.btn_excluir.clicked.connect(self.excluir_paciente)
         right_layout.addWidget(self.btn_excluir)
 
-        main_layout.addWidget(self.right_container)
+        # Preserva somente a altura natural do formulario. Fixar tambem a
+        # largura minima do layout faria as fileiras de botoes alargarem o
+        # painel e serem cortadas em telas menores.
+        right_layout.activate()
+
+        self.right_scroll = QScrollArea()
+        self.right_scroll.setObjectName("PacientesFormScroll")
+        self.right_scroll.setWidgetResizable(True)
+        self.right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.right_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.right_scroll.setMinimumWidth(380)
+        self.right_scroll.setMaximumWidth(450)
+        self.right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.right_scroll.setStyleSheet(
+            "QScrollArea#PacientesFormScroll { background: transparent; border: none; }"
+            "QScrollArea#PacientesFormScroll > QWidget > QWidget { background: transparent; }"
+        )
+        self.right_scroll.setWidget(self.right_container)
+        main_layout.addWidget(self.right_scroll)
+        self.right_container.installEventFilter(self)
+        self._altura_formulario_aplicada = 0
+        self._agendar_ajuste_altura_formulario()
+        self._filtros_compactos = None
+        self._atualizar_layout_filtros()
         self.carregar_pacientes_tabela()
         self._marcar_formulario_salvo()
+
+    def _atualizar_layout_filtros(self):
+        """Empilha os filtros quando falta largura, sem cortar os controles."""
+        compacto = self.width() < 1000
+        if compacto == getattr(self, "_filtros_compactos", None):
+            return
+
+        while self.filter_layout.count():
+            self.filter_layout.takeAt(0)
+
+        if compacto:
+            self.filter_layout.addWidget(self.input_busca, 0, 0)
+            self.filter_layout.addWidget(self.combo_filtro_pasta, 1, 0)
+            self.filter_layout.addWidget(self.btn_importar_pacientes, 2, 0)
+        else:
+            self.filter_layout.addWidget(self.input_busca, 0, 0)
+            self.filter_layout.addWidget(self.combo_filtro_pasta, 0, 1)
+            self.filter_layout.addWidget(self.btn_importar_pacientes, 0, 2)
+        self.filter_layout.setColumnStretch(0, 1)
+        self._filtros_compactos = compacto
+
+    def resizeEvent(self, evento):
+        super().resizeEvent(evento)
+        if hasattr(self, "filter_layout"):
+            self._atualizar_layout_filtros()
+        self._agendar_ajuste_altura_formulario()
+
+    def showEvent(self, evento):
+        super().showEvent(evento)
+        self._agendar_ajuste_altura_formulario()
+
+    def eventFilter(self, objeto, evento):
+        if (
+            objeto is getattr(self, "right_container", None)
+            and evento.type() in (QEvent.Type.LayoutRequest, QEvent.Type.ShowToParent)
+        ):
+            self._agendar_ajuste_altura_formulario()
+        return super().eventFilter(objeto, evento)
+
+    def _agendar_ajuste_altura_formulario(self):
+        if hasattr(self, "right_layout"):
+            QTimer.singleShot(0, self._ajustar_altura_formulario)
+
+    def _ajustar_altura_formulario(self):
+        """Mantem a altura natural do formulario e entrega o excesso ao scroll."""
+        if not hasattr(self, "right_layout"):
+            return
+        self.right_layout.invalidate()
+        self.right_layout.activate()
+        altura = max(
+            self.right_layout.minimumSize().height(),
+            self.right_layout.sizeHint().height(),
+        )
+        if altura > 0 and altura != getattr(self, "_altura_formulario_aplicada", 0):
+            self._altura_formulario_aplicada = altura
+            self.right_container.setMinimumHeight(altura)
+            self.right_container.updateGeometry()
 
     def _estado_formulario_atual(self):
         return (
@@ -871,7 +980,7 @@ class PacientesScreen(QWidget):
                     self.input_nasc.setDate(QDate(1990, 1, 1))
                     
                 self.input_convenio.setText(p.get("convenio") or "PARTICULAR")
-                self.input_pasta.setCurrentText(p.get("pasta") or "")
+                self._selecionar_pasta_formulario(p.get("pasta"))
                 self.input_sexo.setCurrentText(p.get("sexo") or "Masculino")
                 self._definir_cpf_no_campo(p.get("cpf"))
                 self.input_rg.setText(p.get("rg") or "")
@@ -992,8 +1101,10 @@ class PacientesScreen(QWidget):
     def carregar_retornos_paciente(self, paciente_id):
         self.list_retornos.clear()
         if not hasattr(self.db, "listar_retornos_paciente"):
+            self._atualizar_acoes_retorno()
             return
         retornos = self.db.listar_retornos_paciente(paciente_id)
+        primeiro_pendente = None
         for retorno in retornos:
             data = QDate.fromString(str(retorno.get("data_prevista") or ""), "yyyy-MM-dd")
             data_texto = data.toString("dd/MM/yyyy") if data.isValid() else "Data não informada"
@@ -1006,7 +1117,19 @@ class PacientesScreen(QWidget):
             item = QListWidgetItem(texto)
             item.setData(Qt.ItemDataRole.UserRole, retorno)
             self.list_retornos.addItem(item)
+            if primeiro_pendente is None and status == "Pendente":
+                primeiro_pendente = item
+        if primeiro_pendente is not None:
+            self.list_retornos.setCurrentItem(primeiro_pendente)
         self._atualizar_acoes_retorno()
+
+    def _primeiro_retorno_pendente(self):
+        for indice in range(self.list_retornos.count()):
+            item = self.list_retornos.item(indice)
+            retorno = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if retorno and str(retorno.get("status") or "").strip() == "Pendente":
+                return item
+        return None
 
     def _atualizar_acoes_retorno(self):
         """Só libera ações quando existe uma pendência válida selecionada."""
@@ -1021,7 +1144,14 @@ class PacientesScreen(QWidget):
     def _retorno_selecionado(self):
         item = self.list_retornos.currentItem()
         if not item:
-            self.mostrar_alerta_seguro("warning", "Selecione um retorno", "Clique em um retorno da lista primeiro.")
+            item = self._primeiro_retorno_pendente()
+            if item is not None:
+                self.list_retornos.setCurrentItem(item)
+        if not item:
+            self.mostrar_alerta_seguro(
+                "warning", "Nenhum retorno pendente",
+                "Este paciente não possui um retorno pendente para tratar."
+            )
             return None
         return item.data(Qt.ItemDataRole.UserRole)
 
@@ -1186,8 +1316,9 @@ class PacientesScreen(QWidget):
             self.mostrar_alerta_seguro("error", "Não foi possível excluir", "A ficha não foi removida.")
 
     def filtrar_pacientes(self):
-        texto = self.input_busca.text().lower().strip()
+        texto = self.input_busca.text().strip()
         pasta_filtro = self.combo_filtro_pasta.currentText()
+        pasta_filtro_normalizada = normalizar_nome_pasta(pasta_filtro)
         
         if not self.db.supabase:
             return
@@ -1203,17 +1334,14 @@ class PacientesScreen(QWidget):
             todos = resposta.data or []
             filtrados = []
             for p in todos:
-                nome = str(p.get("nome") or "").lower()
-                fone = str(p.get("telefone") or "").lower()
-                conv = str(p.get("convenio") or "").lower()
                 pasta = str(p.get("pasta") or "").strip() or "Geral"
-                cpf = normalizar_cpf(p.get("cpf"))
-                rg = str(p.get("rg") or "").lower()
-                
-                cpf_busca = normalizar_cpf(texto)
-                match_cpf = bool(cpf_busca) and cpf_busca in cpf
-                match_texto = not texto or (texto in nome or texto in fone or texto in conv or texto in rg or match_cpf)
-                match_pasta = "Todas as Pastas" in pasta_filtro or pasta == pasta_filtro
+                match_texto = paciente_corresponde_busca(p, texto)
+                match_pasta = (
+                    "Todas as Pastas" in pasta_filtro
+                    or pasta_filtro_normalizada.casefold() == "geral"
+                    or normalizar_nome_pasta(pasta).casefold()
+                    == pasta_filtro_normalizada.casefold()
+                )
                 
                 if match_texto and match_pasta:
                     filtrados.append((p["id"], p.get("nome") or "", p.get("telefone") or "", p.get("convenio") or "", pasta))
@@ -1223,7 +1351,20 @@ class PacientesScreen(QWidget):
             print(f"Erro ao filtrar pacientes: {e}")
 
     def filtrar_por_pasta_externo(self, nome_pasta):
-        self.combo_filtro_pasta.setCurrentText(nome_pasta)
+        nome = normalizar_nome_pasta(nome_pasta) or "Geral"
+        self.combo_filtro_pasta.setCurrentText(nome)
+        if self.id_em_edicao == -1:
+            self._selecionar_pasta_formulario(nome)
+            self._marcar_formulario_salvo()
+        self.filtrar_pacientes()
+
+    def preparar_novo_paciente(self, pasta="Geral"):
+        """Abre um cadastro novo já associado à pasta escolhida."""
+        nome = normalizar_nome_pasta(pasta) or "Geral"
+        self.combo_filtro_pasta.setCurrentText(nome)
+        self.limpar_formulario()
+        self._selecionar_pasta_formulario(nome)
+        self._marcar_formulario_salvo()
         self.filtrar_pacientes()
 
     def selecionar_paciente_por_id(self, paciente_id):
@@ -1287,16 +1428,33 @@ class PacientesScreen(QWidget):
             }
             
             if self.id_em_edicao == -1:
-                self.db.supabase.table("pacientes").insert(payload).execute()
+                resposta_gravacao = self.db.supabase.table("pacientes").insert(payload).execute()
+                linhas_gravadas = resposta_gravacao.data or []
+                paciente_id_salvo = linhas_gravadas[0].get("id") if linhas_gravadas else None
             else:
+                paciente_id_salvo = self.id_em_edicao
                 self.db.supabase.table("pacientes")\
                     .update(payload)\
                     .eq("id", self.id_em_edicao)\
                     .eq("consultorio_id", self.db.consultorio_id)\
                     .execute()
+
+            if not paciente_id_salvo:
+                raise RuntimeError("O banco não devolveu o paciente salvo para conferência.")
+
+            verificacao = self.db.supabase.table("pacientes")\
+                .select("id, pasta")\
+                .eq("id", paciente_id_salvo)\
+                .eq("consultorio_id", self.db.consultorio_id)\
+                .maybe_single()\
+                .execute()
+            pasta_confirmada = normalizar_nome_pasta((verificacao.data or {}).get("pasta")) or "Geral"
+            if pasta_confirmada.casefold() != normalizar_nome_pasta(pasta).casefold():
+                raise RuntimeError("A pasta do paciente não foi confirmada após o salvamento.")
                 
             self.limpar_formulario()
-            self.carregar_pacientes_tabela()
+            self.filtrar_pacientes()
+            self._atualizar_home_apos_mutacao()
             self.mostrar_alerta_seguro("success", "Sucesso", "Prontuário do paciente salvo com sucesso!")
         except Exception as e:
             registrar_falha("salvar paciente", e)
@@ -1442,6 +1600,7 @@ class PacientesScreen(QWidget):
                     if self.id_em_edicao == paciente_id:
                         self.limpar_formulario()
                     self.carregar_pacientes_tabela()
+                    self._atualizar_home_apos_mutacao()
                     self.mostrar_alerta_seguro("success", "Excluído", "O registro foi marcado como excluído (exclusão lógica).")
                 else:
                     self.mostrar_alerta_seguro("error", "Erro", "Falha ao excluir registro.")
@@ -1469,15 +1628,33 @@ class PacientesScreen(QWidget):
         self.tabela.clearSelection()
         self.btn_excluir.setVisible(False)
         self._atualizar_acoes_retorno()
-        # Sempre garante que "Geral" (ou a primeira pasta válida) fique
-        # selecionada — nunca deixa o combo em branco (índice -1), que
-        # antes podia gravar o paciente com pasta="" (invisível na contagem).
-        indice_geral = self.input_pasta.findText("Geral")
-        if indice_geral != -1:
-            self.input_pasta.setCurrentIndex(indice_geral)
-        elif self.input_pasta.count() > 0:
-            self.input_pasta.setCurrentIndex(0)
+        self._selecionar_pasta_formulario(self._pasta_padrao_novo_paciente())
         self._marcar_formulario_salvo()
+
+    def _pasta_padrao_novo_paciente(self):
+        filtro = self.combo_filtro_pasta.currentText()
+        if "Todas as Pastas" in filtro:
+            return "Geral"
+        return normalizar_nome_pasta(filtro) or "Geral"
+
+    def _selecionar_pasta_formulario(self, pasta):
+        """Seleciona sempre uma pasta válida, sem herdar a do paciente anterior."""
+        nome = normalizar_nome_pasta(pasta) or "Geral"
+        indice = self.input_pasta.findText(nome, Qt.MatchFlag.MatchFixedString)
+        if indice == -1:
+            self.input_pasta.addItem(nome)
+            indice = self.input_pasta.count() - 1
+        self.input_pasta.setCurrentIndex(indice)
+
+    def _atualizar_home_apos_mutacao(self):
+        """Invalida imediatamente contagens e listas exibidas na Home."""
+        janela = getattr(self, "window_principal", None)
+        if janela and hasattr(janela, "recarregar_pastas_sistema"):
+            janela.recarregar_pastas_sistema()
+            return
+        home = getattr(janela, "screen_home", None) if janela else None
+        if home and hasattr(home, "renderizar_lista_pastas"):
+            home.renderizar_lista_pastas(force=True)
 
     def preencher_formulario_via_importacao(self, dados):
         self.input_nome.setText(dados.get("nome", ""))
@@ -1517,8 +1694,10 @@ class PacientesScreen(QWidget):
             
         if self.combo_filtro_pasta.findText(pasta_atual_filtro) != -1:
             self.combo_filtro_pasta.setCurrentText(pasta_atual_filtro)
-        if self.input_pasta.findText(pasta_atual_input) != -1:
-            self.input_pasta.setCurrentText(pasta_atual_input)
+        if self.input_pasta.findText(pasta_atual_input, Qt.MatchFlag.MatchFixedString) != -1:
+            self._selecionar_pasta_formulario(pasta_atual_input)
+        elif self.id_em_edicao == -1:
+            self._selecionar_pasta_formulario(self._pasta_padrao_novo_paciente())
         # Atualizar a lista de pastas pode mudar a selecao padrao do formulario.
         # Isso e uma atualizacao interna, nao uma alteracao feita pelo usuario.
         if self.id_em_edicao == -1:

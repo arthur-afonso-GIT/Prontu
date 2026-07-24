@@ -784,18 +784,39 @@ class Database:
             print(f"Erro ao obter configurações: {e}")
             return {}
 
-    def salvar_configuracao(self, chave: str, valor: str) -> None:
+    def salvar_configuracao(self, chave: str, valor: str) -> bool:
+        """Salva uma configuração e confirma que o valor persistiu no banco."""
         if not self.supabase or self.consultorio_id is None:
-            return
+            return False
         try:
             payload = {
                 "consultorio_id": self.consultorio_id,
                 "chave": chave,
                 "valor": valor,
             }
-            self.supabase.table("configuracoes").upsert(payload).execute()
+            existente = (
+                self.supabase.table("configuracoes")
+                .select("chave")
+                .eq("consultorio_id", self.consultorio_id)
+                .eq("chave", chave)
+                .execute()
+            )
+            if existente.data:
+                (
+                    self.supabase.table("configuracoes")
+                    .update({"valor": valor})
+                    .eq("consultorio_id", self.consultorio_id)
+                    .eq("chave", chave)
+                    .execute()
+                )
+            else:
+                self.supabase.table("configuracoes").insert(payload).execute()
+
+            valor_confirmado = self.obter_configuracao(chave, default="")
+            return valor_confirmado == valor
         except Exception as e:
             print(f"Erro ao salvar configuração {chave}: {e}")
+            return False
 
     # --- FUNÇÕES PARA PACIENTES ---
     def salvar_paciente(self, dados):

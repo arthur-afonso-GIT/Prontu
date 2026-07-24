@@ -3,10 +3,28 @@ import time
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QFrame, QTableWidget, QHeaderView, QPushButton, QSizePolicy,
                                QInputDialog, QMessageBox, QTableWidgetItem, QColorDialog)
-from PySide6.QtCore import Qt, QDate
+from PySide6.QtCore import Qt, QDate, QMimeData
 from PySide6.QtGui import QColor
 from ui.design_system import definir_variante
 from ui.screens.pacientes import normalizar_nome_pasta
+
+
+MIME_PACIENTE_ID = "application/x-prontu-paciente-id"
+
+
+class TabelaPacientesRecentes(QTableWidget):
+    """Tabela que permite arrastar um paciente para um card de pasta."""
+
+    def mimeData(self, itens):
+        mime = QMimeData()
+        for item in itens:
+            paciente_id = item.data(Qt.ItemDataRole.UserRole)
+            if paciente_id is not None:
+                mime.setData(MIME_PACIENTE_ID, str(paciente_id).encode("utf-8"))
+                break
+        return mime
+
+
 class HomeScreen(QWidget):
     def __init__(self, window_principal, on_novo_paciente_click=None, on_pasta_click=None, on_agendar_retorno_click=None, on_consulta_click=None):
         super().__init__()
@@ -148,7 +166,7 @@ class HomeScreen(QWidget):
         lbl_rec_tit.setStyleSheet("font-size: 15px; font-weight: bold; color: #334155;")
         recentes_vbox.addWidget(lbl_rec_tit)
         
-        self.table_recentes = QTableWidget()
+        self.table_recentes = TabelaPacientesRecentes()
         self.table_recentes.setColumnCount(2)
         self.table_recentes.setHorizontalHeaderLabels(["Nome do Paciente", "Pasta / Grupo"])
         self.table_recentes.verticalHeader().setVisible(False)
@@ -157,6 +175,9 @@ class HomeScreen(QWidget):
         self.table_recentes.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table_recentes.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table_recentes.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table_recentes.setDragEnabled(True)
+        self.table_recentes.setDragDropMode(QTableWidget.DragDropMode.DragOnly)
+        self.table_recentes.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.table_recentes.setMouseTracking(True)
         self.table_recentes.viewport().setMouseTracking(True)
         self.table_recentes.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -221,7 +242,8 @@ class HomeScreen(QWidget):
                 on_clique=self.on_pasta_click,
                 on_editar=self.acao_editar_pasta,
                 on_excluir=self.acao_excluir_pasta,
-                on_mudar_cor=self.acao_mudar_cor_pasta
+                on_mudar_cor=self.acao_mudar_cor_pasta,
+                on_mover_paciente=self.mover_paciente_para_pasta,
             )
             self.pastas_grid_layout.addWidget(card)
             
@@ -247,11 +269,7 @@ class HomeScreen(QWidget):
     def _contar_pacientes_na_lista(pacientes, nome_pasta):
         nome_limpo = nome_pasta.strip().lower()
         if nome_limpo == "geral":
-            return sum(
-                1 for paciente in pacientes
-                if not (paciente.get("pasta") or "").strip()
-                or (paciente.get("pasta") or "").strip().lower() == "geral"
-            )
+            return len(pacientes)
         return sum(
             1 for paciente in pacientes
             if (paciente.get("pasta") or "").strip().lower() == nome_limpo
@@ -268,6 +286,41 @@ class HomeScreen(QWidget):
                 self.window_principal.atualizar_cor_pasta(nome_pasta, cor_escolhida.name())
             self.renderizar_lista_pastas(force=True)
 
+    def mover_paciente_para_pasta(self, paciente_id, nome_pasta):
+        """Move o registro existente para outra pasta, sem duplicar o paciente."""
+        if not self.db.supabase:
+            self.mostrar_alerta_seguro(
+                "error", "Sem conexão",
+                "Não foi possível alterar a pasta do paciente agora.",
+            )
+            return False
+
+        pasta = normalizar_nome_pasta(nome_pasta) or "Geral"
+        try:
+            resposta = (
+                self.db.supabase.table("pacientes")
+                .update({"pasta": pasta})
+                .eq("id", int(paciente_id))
+                .eq("consultorio_id", self.db.consultorio_id)
+                .is_("deleted_at", "null")
+                .execute()
+            )
+            if not resposta.data:
+                raise RuntimeError("O banco não confirmou a alteração da pasta.")
+
+            if hasattr(self.window_principal, "recarregar_pastas_sistema"):
+                self.window_principal.recarregar_pastas_sistema()
+            else:
+                self.renderizar_lista_pastas(force=True)
+            return True
+        except Exception as e:
+            print(f"Erro ao mover paciente para a pasta: {e}")
+            self.mostrar_alerta_seguro(
+                "error", "Não foi possível mover",
+                "A pasta do paciente não foi alterada. Tente novamente.",
+            )
+            return False
+
     def contar_pacientes_na_pasta_supabase(self, nome_pasta):
         if not self.db.supabase:
             return 0
@@ -279,10 +332,9 @@ class HomeScreen(QWidget):
                 .is_("deleted_at", "null")
 
             if nome_limpo.lower() == "geral":
-                # "Geral" também deve contar pacientes antigos que ficaram com
-                # pasta em branco/nula no banco (cadastrados antes do valor
-                # padrão "Geral" ser sempre garantido no formulário).
-                query = query.or_(f"pasta.ilike.{nome_limpo},pasta.is.null,pasta.eq.")
+                # "Geral" é a visão guarda-chuva: conta todos os pacientes,
+                # mesmo que cada registro esteja associado a outra pasta.
+                pass
             else:
                 query = query.ilike("pasta", nome_limpo)
 
@@ -561,17 +613,27 @@ class CardMetrica(QFrame):
         self.lbl_valor.setText(novo_valor)
 
 class CardPasta(QFrame):
-    def __init__(self, nome, quantidade, cor="#0284c7", on_clique=None, on_editar=None, on_excluir=None, on_mudar_cor=None):
+    def __init__(
+        self, nome, quantidade, cor="#0284c7", on_clique=None,
+        on_editar=None, on_excluir=None, on_mudar_cor=None,
+        on_mover_paciente=None,
+    ):
         super().__init__()
         self.nome_pasta = nome
         self.on_clique_callback = on_clique
+        self.on_mover_paciente_callback = on_mover_paciente
+        self._cor_pasta = cor
+        self.setAcceptDrops(bool(on_mover_paciente))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("Abrir pacientes desta pasta")
+        self.setToolTip(
+            "Clique para abrir ou arraste um paciente recente para esta pasta"
+        )
         
         self.setFixedSize(175, 125)
         self.setStyleSheet(f"""
             QFrame {{ background-color: white; border: 1px solid #e2e8f0; border-top: 4px solid {cor}; border-radius: 8px; }}
             QFrame:hover {{ border: 1px solid #0284c7; border-top: 4px solid {cor}; background-color: #fafafa; }}
+            QFrame[recebendoPaciente="true"] {{ border: 2px solid #0284c7; border-top: 4px solid {cor}; background-color: #e0f2fe; }}
         """)
         
         layout = QVBoxLayout(self)
@@ -619,3 +681,36 @@ class CardPasta(QFrame):
         if event.button() == Qt.MouseButton.LeftButton and self.on_clique_callback:
             self.on_clique_callback(self.nome_pasta)
         super().mousePressEvent(event)
+
+    def _destacar_destino(self, ativo):
+        self.setProperty("recebendoPaciente", "true" if ativo else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(MIME_PACIENTE_ID):
+            self._destacar_destino(True)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._destacar_destino(False)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        self._destacar_destino(False)
+        dados = bytes(event.mimeData().data(MIME_PACIENTE_ID)).decode("utf-8")
+        try:
+            paciente_id = int(dados)
+        except (TypeError, ValueError):
+            event.ignore()
+            return
+        if (
+            self.on_mover_paciente_callback
+            and self.on_mover_paciente_callback(paciente_id, self.nome_pasta)
+        ):
+            event.acceptProposedAction()
+            return
+        event.ignore()

@@ -25,6 +25,13 @@ dist/
 
 # PyInstaller
 *.spec
+!installer/Prontu.spec
+
+# Configuracao publica gerada apenas durante o empacotamento
+installer/generated/
+
+# Instaladores finais
+release/
 
 # IDE
 .vscode/

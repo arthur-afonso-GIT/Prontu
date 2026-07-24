@@ -209,6 +209,14 @@ class LoginDialog(QDialog):
         return self._pagina([("Chave de acesso:", self.chave)], "Use somente para ativar o primeiro dispositivo do proprietário.", "Ativar clínica", self.ativar)
 
     def entrar(self):
+        if not self.db.supabase:
+            QMessageBox.warning(
+                self,
+                "Conexao indisponivel",
+                "O Prontu nao conseguiu carregar a configuracao de conexao. "
+                "Reinstale a versao mais recente ou entre em contato com o suporte.",
+            )
+            return
         if self.db.entrar_com_email(self.email_login.text().strip(), self.senha_login.text(), self.checkbox_lembrar.isChecked()): self.accept()
         else: QMessageBox.warning(self, "Não foi possível entrar", "Confira o e-mail e a senha. No primeiro acesso, use a aba 'Usar convite'.")
 

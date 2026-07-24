@@ -65,9 +65,10 @@ class SessionManager:
 
     def activate_with_key(self, chave: str, device_name: str | None = None) -> dict[str, Any]:
         """Valida chave na Edge Function e obtém sessão autenticada."""
-        fn_url = os.getenv("PRONTU_ACTIVATION_URL", "").rstrip("/")
-        if not fn_url:
-            raise RuntimeError("Ativacao indisponivel: configure PRONTU_ACTIVATION_URL")
+        fn_url = os.getenv(
+            "PRONTU_ACTIVATION_URL",
+            f"{self.supabase_url}/functions/v1",
+        ).rstrip("/")
         if not fn_url.endswith("/ativar-consultorio"):
             fn_url = f"{fn_url}/ativar-consultorio"
         headers = {
