@@ -5,6 +5,8 @@ import re
 import unicodedata
 from datetime import date, datetime
 
+from services.pacientes_service import normalizar_estado_civil, normalizar_rg
+
 
 def somente_numeros(valor):
     return "".join(caractere for caractere in str(valor or "") if caractere.isdigit())
@@ -45,6 +47,9 @@ def normalizar_data(valor):
     texto = _texto(valor)
     if not texto:
         return ""
+    numeros = somente_numeros(texto)
+    if len(numeros) == 8 and not any(separador in texto for separador in "-/"):
+        texto = f"{numeros[:2]}/{numeros[2:4]}/{numeros[4:]}"
     for formato in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
         try:
             return datetime.strptime(texto, formato).strftime("%Y-%m-%d")
@@ -109,6 +114,10 @@ def preparar_registros(cabecalhos, linhas):
             dados[campo] = _texto(linha[indice]) if indice < len(linha) else ""
         dados["cpf"] = somente_numeros(dados["cpf"])[:11]
         dados["telefone"] = somente_numeros(dados["telefone"])
+        dados["rg"] = normalizar_rg(dados["rg"])
+        dados["estado_civil"] = normalizar_estado_civil(
+            dados["estado_civil"]
+        )
         dados["nascimento"] = normalizar_data(dados["nascimento"])
         if not dados["nome"]:
             erros.append(f"Linha {numero_linha}: nome não informado.")

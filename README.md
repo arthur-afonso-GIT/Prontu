@@ -85,20 +85,20 @@ These guides are designed for end users and do not require knowledge of Python, 
 
 ```text
 Prontu
-├── main.py                 Application entry point
-├── database/               Supabase access, session management and secure local storage
+├── main.py                  Single application entry point
+├── database/                Supabase access, session management and secure local storage
 ├── ui/
-│   ├── main_window.py      Navigation shell, role-aware menus and shared application behavior
-│   ├── screens/            Dashboard, patients, agenda, records, finance, team and settings
-│   └── assets/             Product branding and visual assets
-├── services/               Backup and background-work services
-├── installer/              PyInstaller and Inno Setup distribution definitions
-├── scripts/                Build, packaging and release support scripts
-├── output/pdf/             End-user product documentation
+│   ├── qml/                 Complete responsive user interface
+│   ├── qml_*_controller.py  Python controllers exposed to QML
+│   └── assets/              Product branding and visual assets
+├── services/                Business rules, backup and background services
+├── installer/               PyInstaller and Inno Setup distribution definitions
+├── scripts/                 Build, packaging and release support scripts
+├── output/pdf/              End-user product documentation
 ├── supabase/
-│   ├── migrations/         PostgreSQL schema, Row Level Security policies and database evolution
-│   └── functions/          Activation, login, password reset, team and messaging APIs
-└── tests/                  Automated regression checks
+│   ├── migrations/          PostgreSQL schema, Row Level Security policies and database evolution
+│   └── functions/           Activation, login, password reset, team and messaging APIs
+└── tests/                   Automated regression checks
 ```
 
 The desktop interface communicates with Supabase through a small Python data layer. PostgreSQL migrations define data structure and policies; Edge Functions handle sensitive operations such as activation, account creation, invitations, role changes, and password recovery without exposing privileged credentials in the desktop application.

@@ -1,23 +1,44 @@
+"""Ponto de entrada oficial do Prontu.
+
+A interface do aplicativo é construída em QML. Banco de dados, segurança e
+regras de negócio continuam em Python para manter uma única arquitetura.
+"""
+from __future__ import annotations
+
+import logging
 import os
 import sys
 from pathlib import Path
 
-# 1. Carrega as variáveis de ambiente do arquivo .env imediatamente
+# O estilo precisa ser definido antes da criação do QApplication.
+os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
+
 from dotenv import load_dotenv
+from PySide6.QtCore import QEventLoop, QUrl
+from PySide6.QtGui import QIcon
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtWidgets import QApplication
+
+from database import Database
+from ui.qml_agenda_controller import AgendaController
+from ui.qml_configuracoes_controller import ConfiguracoesController
+from ui.qml_controller import PatientsController, QmlAppController
+from ui.qml_equipe_controller import EquipeController
+from ui.qml_fichas_controller import FichasController
+from ui.qml_financeiro_controller import FinanceiroController
+from ui.qml_home_controller import HomeController
+from ui.qml_login_controller import LoginController
 from utils.diagnostics import configure_diagnostics
 
-_PASTA_APLICACAO = os.path.abspath(os.path.dirname(__file__))
-_PASTA_RECURSOS = getattr(sys, "_MEIPASS", _PASTA_APLICACAO)
-_CONFIG_PUBLICA = os.path.join(_PASTA_RECURSOS, "prontu_public.env")
-_CONFIG_DESENVOLVIMENTO = os.path.join(_PASTA_APLICACAO, ".env")
+
+SOURCE_DIR = Path(__file__).resolve().parent
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", SOURCE_DIR))
+QML_DIR = RESOURCE_DIR / "ui" / "qml"
+LOGO_PATH = RESOURCE_DIR / "ui" / "assets" / "prontu_logo.png"
 
 
 def _ler_versao() -> str:
-    candidatos = (
-        Path(_PASTA_RECURSOS) / "VERSION",
-        Path(_PASTA_APLICACAO) / "VERSION",
-    )
-    for caminho in candidatos:
+    for caminho in (RESOURCE_DIR / "VERSION", SOURCE_DIR / "VERSION"):
         try:
             versao = caminho.read_text(encoding="utf-8").strip()
             if versao:
@@ -30,198 +51,143 @@ def _ler_versao() -> str:
 APP_VERSION = _ler_versao()
 logger = configure_diagnostics(APP_VERSION)
 
-if os.path.isfile(_CONFIG_PUBLICA):
-    load_dotenv(_CONFIG_PUBLICA, override=False, encoding="utf-8-sig")
-if os.path.isfile(_CONFIG_DESENVOLVIMENTO):
-    load_dotenv(_CONFIG_DESENVOLVIMENTO, override=True, encoding="utf-8-sig")
 
-# Garante que o diretório atual está no PATH do Python
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+def _carregar_configuracao() -> None:
+    """Carrega somente configurações públicas no instalador.
 
-from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox, QDialog
-from database import Database
-from ui.login_dialog import LoginDialog
-from ui.design_system import instalar_design_system
-from ui.interaction_feedback import instalar_feedback_interativo
-
-
-def _importar_main_window():
+    O arquivo ``.env`` é usado apenas durante o desenvolvimento e nunca é
+    empacotado. Segredos permanecem no Supabase.
     """
-    Importa a classe MainWindow de forma robusta, independente do diretório
-    de trabalho atual ou do estado do sys.path.
+    publica = RESOURCE_DIR / "prontu_public.env"
+    desenvolvimento = SOURCE_DIR / ".env"
+    if publica.is_file():
+        load_dotenv(publica, override=False, encoding="utf-8-sig")
+    if desenvolvimento.is_file() and not getattr(sys, "frozen", False):
+        load_dotenv(desenvolvimento, override=True, encoding="utf-8-sig")
 
-    Se a importação normal falhar, tenta localizar o arquivo main_window.py
-    diretamente pelo caminho absoluto e carrega o módulo a partir dele.
-    Se ainda assim não encontrar, exibe um diagnóstico detalhado explicando
-    o motivo exato da falha (arquivo ausente, extensão duplicada, etc.).
-    """
-    pasta_base = os.path.abspath(os.path.dirname(__file__))
 
-    # Tentativa 1: import padrão (caminho normal, mais rápido)
-    try:
-        from ui.main_window import MainWindow
-        return MainWindow
-    except ModuleNotFoundError:
-        pass
+def _recursos_ausentes() -> list[str]:
+    obrigatorios = (
+        QML_DIR / "Main.qml",
+        QML_DIR / "Login.qml",
+        LOGO_PATH,
+    )
+    return [str(caminho) for caminho in obrigatorios if not caminho.is_file()]
 
-    # Tentativa 1.5: checa diretamente a raiz do projeto antes de recursar.
-    # Isso evita pegar cópias antigas/duplicadas que estejam em subpastas.
-    caminho_raiz = os.path.join(pasta_base, "main_window.py")
-    if os.path.isfile(caminho_raiz):
-        return _carregar_modulo_main_window(caminho_raiz)
 
-    # Tentativa 2: busca dinâmica e recursiva pelo arquivo dentro do projeto,
-    # ignorando pastas que nunca contêm código-fonte real (builds, venvs, etc).
-    pastas_ignoradas = {
-        ".git", "__pycache__", "venv", ".venv", "env",
-        "node_modules", "dist", "build", "site-packages",
-    }
-    encontrados_por_profundidade = {}
+def validar_instalacao() -> int:
+    """Validação rápida usada depois de empacotar o aplicativo."""
+    ausentes = _recursos_ausentes()
+    if ausentes:
+        logger.error("Recursos obrigatórios ausentes: %s", ", ".join(ausentes))
+        return 1
+    logger.info("Validação do pacote concluída com sucesso")
+    return 0
 
-    for raiz, subpastas, arquivos in os.walk(pasta_base):
-        subpastas[:] = [d for d in subpastas if d not in pastas_ignoradas]
-        if "main_window.py" in arquivos:
-            caminho = os.path.join(raiz, "main_window.py")
-            profundidade = caminho.count(os.sep)
-            encontrados_por_profundidade.setdefault(profundidade, []).append(caminho)
 
-    if encontrados_por_profundidade:
-        profundidade_minima = min(encontrados_por_profundidade)
-        candidatos = encontrados_por_profundidade[profundidade_minima]
-        caminho_real = candidatos[0]
-
-        todos_encontrados = [c for lista in encontrados_por_profundidade.values() for c in lista]
-        if len(todos_encontrados) > 1:
-            print(
-                "Aviso: mais de um 'main_window.py' encontrado no projeto (fora de dist/build).\n"
-                "Usando o mais próximo da raiz:\n  -> " + caminho_real + "\n"
-                "Outras cópias encontradas (considere remover para evitar confusão):\n"
-                + "\n".join(f"  - {c}" for c in todos_encontrados if c != caminho_real),
-                file=sys.stderr,
-            )
-
-        return _carregar_modulo_main_window(caminho_real)
-
-    # Se chegou aqui, o arquivo realmente não existe em NENHUM lugar do projeto.
-    try:
-        arquivos_na_pasta = os.listdir(pasta_base)
-    except Exception as e:
-        arquivos_na_pasta = [f"<erro ao listar pasta: {e}>"]
-
-    mensagem = (
-        "Não foi possível encontrar 'main_window.py' em nenhuma subpasta de código-fonte de:\n"
-        f"  {pasta_base}\n\n"
-        "O arquivo não existe fisicamente no disco (fora de pastas de build). Causas mais prováveis:\n"
-        "  1) O arquivo foi editado/criado numa conversa com IA (ex: Claude) mas\n"
-        "     nunca foi de fato salvo/baixado para este projeto no seu PC;\n"
-        "  2) Está sincronizado com o OneDrive como 'somente na nuvem' e ainda\n"
-        "     não foi baixado para o disco local;\n"
-        "  3) Foi renomeado ou apagado.\n\n"
-        "Conteúdo da pasta raiz do projeto:\n"
-        + "\n".join(f"  - {f}" for f in sorted(arquivos_na_pasta))
+def _executar_login_qml(app: QApplication, banco: Database) -> bool:
+    controller = LoginController(banco)
+    engine = QQmlApplicationEngine()
+    engine.rootContext().setContextProperty("loginController", controller)
+    engine.rootContext().setContextProperty(
+        "appLogoUrl", QUrl.fromLocalFile(str(LOGO_PATH))
     )
 
-    print(mensagem, file=sys.stderr)
-    raise ModuleNotFoundError(mensagem)
+    estado = {"autenticado": False}
+    espera = QEventLoop()
+
+    def autenticado() -> None:
+        estado["autenticado"] = True
+        espera.quit()
+
+    controller.autenticado.connect(autenticado)
+    controller.cancelado.connect(espera.quit)
+    engine.load(QUrl.fromLocalFile(str(QML_DIR / "Login.qml")))
+    if not engine.rootObjects():
+        logger.error("Não foi possível carregar a tela de acesso")
+        return False
+
+    encerrava_ultima_janela = app.quitOnLastWindowClosed()
+    app.setQuitOnLastWindowClosed(False)
+    espera.exec()
+    app.setQuitOnLastWindowClosed(encerrava_ultima_janela)
+
+    janela = engine.rootObjects()[0] if engine.rootObjects() else None
+    if janela and janela.isVisible():
+        janela.close()
+    return estado["autenticado"] and banco.esta_autenticado()
 
 
-def _carregar_modulo_main_window(caminho_arquivo):
-    """Carrega o módulo main_window.py a partir de um caminho absoluto específico."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("main_window", caminho_arquivo)
-    modulo = importlib.util.module_from_spec(spec)
-    sys.modules["main_window"] = modulo
-    spec.loader.exec_module(modulo)
+def executar_aplicativo() -> int:
+    _carregar_configuracao()
 
-    # Garante que a pasta onde o arquivo foi achado também entre no
-    # sys.path, para o caso de main_window.py importar módulos irmãos
-    # (ex: 'from ui.screens.home import HomeScreen' relativos à mesma pasta)
-    pasta_do_arquivo = os.path.dirname(caminho_arquivo)
-    if pasta_do_arquivo not in sys.path:
-        sys.path.insert(0, pasta_do_arquivo)
+    if "--validate-installation" in sys.argv:
+        return validar_instalacao()
 
-    return modulo.MainWindow
+    ausentes = _recursos_ausentes()
+    if ausentes:
+        logger.error("Instalação incompleta. Recursos ausentes: %s", ", ".join(ausentes))
+        return 1
 
-
-def inicializar_sistema():
-    logger.info("Inicializando interface")
     app = QApplication(sys.argv)
     app.setApplicationName("Prontu")
+    app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName("Prontu")
-    caminho_icone = os.path.join(_PASTA_RECURSOS, "ui", "assets", "prontu_logo.png")
-    if os.path.isfile(caminho_icone):
-        app.setWindowIcon(QIcon(caminho_icone))
-    instalar_design_system(app)
-    instalar_feedback_interativo(app)
-    
-    # Inicializa o banco de dados principal
+    app.setQuitOnLastWindowClosed(True)
+    app.setWindowIcon(QIcon(str(LOGO_PATH)))
+
     try:
-        db = Database()
+        banco = Database()
     except Exception:
         logger.exception("Falha ao inicializar banco e sessão")
-        raise
-    
-    # Se não houver sessão autenticada, solicita a chave
-    while not db.esta_autenticado():
-        dialogo = LoginDialog(db)
-        if dialogo.exec() != QDialog.DialogCode.Accepted:
-            sys.exit(0)
-        continue
+        return 1
 
-        chave, ok = QInputDialog.getText(
-            None, 
-            "Ativação do Sistema — Prontu", 
-            "Por favor, insira a Chave de Acesso do seu Consultório:\n"
-            "(Ex: PRONTU-DENTISTA-998)"
-        )
-        
-        if not ok:
-            sys.exit(0)
-            
-        chave_limpa = chave.strip()
-        if not chave_limpa:
-            QMessageBox.warning(None, "Campo Vazio", "A chave não pode estar em branco!")
-            continue
+    if not banco.esta_autenticado() and not _executar_login_qml(app, banco):
+        return 0
 
-        # Valida no Supabase
-        resultado = db.validar_chave_acesso(chave_limpa)
-        
-        if resultado and isinstance(resultado, dict):
-            id_detectado = resultado.get("consultorio_id")
-            clinica = resultado.get("nome_clinica") or "Seu Consultório"
-            
-            if id_detectado is not None:
-                db.salvar_consultorio_id_local(id_detectado)
-                
-                QMessageBox.information(
-                    None, 
-                    "Ativação Concluída", 
-                    f"Dispositivo ativado com sucesso!\n\nBem-vindo(a) ao banco de dados da clínica:\n🏥 {clinica}"
-                )
-            else:
-                QMessageBox.critical(
-                    None,
-                    "Erro de Cadastro",
-                    "Esta chave foi validada, mas não possui um ID de consultório associado no banco de dados."
-                )
-        else:
-            QMessageBox.critical(
-                None, 
-                "Chave Inválida", 
-                "A chave inserida não foi encontrada ou está incorreta.\nTente novamente."
-            )
+    controller = QmlAppController(banco, LOGO_PATH)
+    controllers = {
+        "appController": controller,
+        "patientsController": PatientsController(banco),
+        "agendaController": AgendaController(banco),
+        "fichasController": FichasController(banco),
+        "financeiroController": FinanceiroController(banco),
+        "equipeController": EquipeController(banco),
+        "configuracoesController": ConfiguracoesController(banco),
+        "homeController": HomeController(banco),
+    }
 
-    # Importação atrasada (Lazy Import) para evitar conflitos circulares
-    MainWindow = _importar_main_window()
-    
-    # Passamos a conexão configurada para a janela principal
-    janela = MainWindow(db)
-    janela.show()
-    
-    exit_code = app.exec()
-    logger.info("Aplicativo encerrado | código=%s", exit_code)
-    sys.exit(exit_code)
+    engine = QQmlApplicationEngine()
+    contexto = engine.rootContext()
+    for nome, instancia in controllers.items():
+        contexto.setContextProperty(nome, instancia)
+    engine.load(QUrl.fromLocalFile(str(QML_DIR / "Main.qml")))
+    if not engine.rootObjects():
+        logger.error("Não foi possível carregar a janela principal")
+        return 1
+
+    logger.info("Aplicativo iniciado | versão=%s", APP_VERSION)
+    codigo_saida = app.exec()
+
+    # Desmonta a árvore QML enquanto os controladores Python ainda existem.
+    for janela in list(engine.rootObjects()):
+        janela.setVisible(False)
+        janela.deleteLater()
+    app.processEvents()
+    engine.clearComponentCache()
+    logger.info("Aplicativo encerrado | código=%s", codigo_saida)
+    return codigo_saida
+
+
+# Compatibilidade com chamadas antigas sem manter uma segunda interface.
+inicializar_sistema = executar_aplicativo
+
 
 if __name__ == "__main__":
-    inicializar_sistema()
+    try:
+        raise SystemExit(executar_aplicativo())
+    except SystemExit:
+        raise
+    except Exception:
+        logging.getLogger("prontu").exception("Falha inesperada na inicialização")
+        raise

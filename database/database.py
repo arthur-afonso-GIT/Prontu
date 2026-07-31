@@ -1,6 +1,8 @@
 import os
 import sys
 import json
+import mimetypes
+import uuid
 import httpx
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -55,6 +57,43 @@ else:
     print("AVISO: Nenhum arquivo .env encontrado nas pastas mapeadas.")
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".prontu_config.json")
+
+EXTENSOES_ANEXO_FICHA = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
+TAMANHO_MAXIMO_ANEXO_FICHA = 15 * 1024 * 1024
+
+
+class ErroAnexoFicha(RuntimeError):
+    """Falha segura e compreensível ao preparar um anexo clínico."""
+
+
+def _normalizar_anexos_ficha(valor) -> list[dict]:
+    """Converte JSON/texto antigo em uma lista segura de metadados."""
+    if isinstance(valor, str):
+        try:
+            valor = json.loads(valor)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+    if not isinstance(valor, list):
+        return []
+    anexos = []
+    for item in valor:
+        if not isinstance(item, dict):
+            continue
+        caminho = str(item.get("caminho") or "").strip()
+        if not caminho:
+            continue
+        anexo = {
+            "nome": str(item.get("nome") or "Anexo"),
+            "caminho": caminho,
+            "tipo": str(item.get("tipo") or "application/octet-stream"),
+        }
+        try:
+            if item.get("tamanho") is not None:
+                anexo["tamanho"] = max(0, int(item.get("tamanho") or 0))
+        except (TypeError, ValueError):
+            pass
+        anexos.append(anexo)
+    return anexos
 
 
 def _limpar_credencial(valor_bruto, prefixo: str):
@@ -479,7 +518,11 @@ class Database:
         try:
             resposta = (
                 self.supabase.table("audit_logs")
-                .select("id, acao, entidade, registro_id, contexto, valor_anterior, valor_novo, criado_em")
+                .select(
+                    "id, acao, entidade, registro_id, contexto, "
+                    "valor_anterior, valor_novo, criado_em, "
+                    "ator_nome, ator_papel"
+                )
                 .eq("consultorio_id", self.consultorio_id)
                 .order("criado_em", desc=True)
                 .limit(limite)
@@ -990,3 +1033,1188 @@ class Database:
         except Exception as erro:
             print(f"Erro ao salvar paciente básico: {type(erro).__name__}.")
             return None
+
+    def listar_pacientes_interface(self) -> list[dict]:
+        """Lista pacientes para interfaces desacopladas de Qt Widgets."""
+        if not self.supabase or self.consultorio_id is None:
+            return []
+        if self.obter_papel_atual() == "secretaria":
+            return self.listar_pacientes_secretaria(None)
+        try:
+            resposta = (
+                self.supabase.table("pacientes")
+                .select("id, nome, telefone, convenio, pasta, cpf, rg")
+                .eq("consultorio_id", self.consultorio_id)
+                .is_("deleted_at", "null")
+                .order("nome")
+                .execute()
+            )
+            return resposta.data or []
+        except Exception as erro:
+            print(f"Erro ao listar pacientes para a interface: {type(erro).__name__}.")
+            return []
+
+    def obter_paciente_interface(self, paciente_id: int) -> dict | None:
+        """Obtém um paciente respeitando os campos permitidos ao papel atual."""
+        if not self.supabase or self.consultorio_id is None or not paciente_id:
+            return None
+        if self.obter_papel_atual() == "secretaria":
+            return self.obter_paciente_secretaria(paciente_id)
+        try:
+            resposta = (
+                self.supabase.table("pacientes")
+                .select(
+                    "id, nome, telefone, nascimento, convenio, pasta, sexo, "
+                    "cpf, rg, estado_civil, profissao, endereco, queixa, "
+                    "lembretes_whatsapp_ativos"
+                )
+                .eq("id", int(paciente_id))
+                .eq("consultorio_id", self.consultorio_id)
+                .is_("deleted_at", "null")
+                .maybe_single()
+                .execute()
+            )
+            return resposta.data or None
+        except Exception as erro:
+            print(f"Erro ao obter paciente para a interface: {type(erro).__name__}.")
+            return None
+
+    def salvar_paciente_interface(
+        self, paciente_id: int | None, dados: dict
+    ) -> int | None:
+        """Cria ou atualiza um paciente usando o escopo da sessão atual."""
+        if not self.supabase or self.consultorio_id is None:
+            return None
+        if self.obter_papel_atual() == "secretaria":
+            return self.salvar_paciente_secretaria(paciente_id, dados)
+
+        permitidos = {
+            "nome", "telefone", "nascimento", "convenio", "pasta", "sexo",
+            "cpf", "rg", "estado_civil", "profissao", "endereco", "queixa",
+            "lembretes_whatsapp_ativos",
+        }
+        payload = {
+            chave: valor for chave, valor in dados.items() if chave in permitidos
+        }
+        payload["consultorio_id"] = self.consultorio_id
+        try:
+            if paciente_id is None:
+                resposta = self.supabase.table("pacientes").insert(payload).execute()
+                linhas = resposta.data or []
+                return int(linhas[0]["id"]) if linhas else None
+
+            (
+                self.supabase.table("pacientes")
+                .update(payload)
+                .eq("id", int(paciente_id))
+                .eq("consultorio_id", self.consultorio_id)
+                .execute()
+            )
+            return int(paciente_id)
+        except Exception as erro:
+            print(f"Erro ao salvar paciente pela interface: {type(erro).__name__}.")
+            return None
+
+    def listar_pastas_interface(self) -> list[str]:
+        """Retorna as pastas da clínica, incluindo as usadas por pacientes."""
+        if not self.supabase or self.consultorio_id is None:
+            return ["Geral"]
+        try:
+            pastas = self.supabase.table("pastas").select("nome").eq(
+                "consultorio_id", self.consultorio_id
+            ).order("nome").execute()
+            pacientes = self.supabase.table("pacientes").select("pasta").eq(
+                "consultorio_id", self.consultorio_id
+            ).is_("deleted_at", "null").execute()
+            nomes = ["Geral"]
+            nomes.extend(str(item.get("nome") or "").strip() for item in (pastas.data or []))
+            nomes.extend(str(item.get("pasta") or "").strip() for item in (pacientes.data or []))
+            unicos = {}
+            for nome in nomes:
+                nome = " ".join(nome.split())
+                if nome:
+                    unicos.setdefault(nome.casefold(), nome)
+            return sorted(
+                unicos.values(),
+                key=lambda nome: (nome.casefold() != "geral", nome.casefold()),
+            )
+        except Exception as erro:
+            print(f"Erro ao listar pastas para a interface: {type(erro).__name__}.")
+            return ["Geral"]
+
+    # --- INTERFACE QML DO PAINEL PRINCIPAL ---
+    def listar_home_interface(self) -> dict:
+        """Carrega o resumo da Home com poucas consultas e escopo da clínica."""
+        if not self.supabase or self.consultorio_id is None:
+            return {
+                "pacientes": [], "pastas": [], "agenda": [], "retornos": []
+            }
+        from datetime import date
+
+        hoje = date.today().strftime("%d/%m/%Y")
+        try:
+            pacientes = (
+                self.supabase.table("pacientes")
+                .select("id,nome,pasta")
+                .eq("consultorio_id", self.consultorio_id)
+                .is_("deleted_at", "null")
+                .order("id", desc=True)
+                .execute()
+            )
+            pastas = (
+                self.supabase.table("pastas")
+                .select("nome,cor")
+                .eq("consultorio_id", self.consultorio_id)
+                .order("nome")
+                .execute()
+            )
+            agenda = (
+                self.supabase.table("agenda")
+                .select("data,horario,paciente,status,tipo_bloco")
+                .eq("consultorio_id", self.consultorio_id)
+                .eq("data", hoje)
+                .eq("tipo_bloco", "principal")
+                .order("horario")
+                .execute()
+            )
+            return {
+                "data_hoje": hoje,
+                "pacientes": pacientes.data or [],
+                "pastas": pastas.data or [],
+                "agenda": agenda.data or [],
+                "retornos": self.listar_retornos_pendentes(),
+            }
+        except Exception as erro:
+            print(f"Erro ao carregar a Home: {type(erro).__name__}.")
+            return {
+                "data_hoje": hoje,
+                "pacientes": [],
+                "pastas": [],
+                "agenda": [],
+                "retornos": [],
+                "erro": True,
+            }
+
+    def criar_pasta_interface(self, nome: str, cor: str = "#0284c7") -> bool:
+        if not self.supabase or self.consultorio_id is None:
+            return False
+        nome = " ".join(str(nome or "").strip().split())
+        if not nome:
+            return False
+        try:
+            existentes = self.listar_pastas_interface()
+            if nome.casefold() in {item.casefold() for item in existentes}:
+                return False
+            resposta = self.supabase.table("pastas").insert({
+                "consultorio_id": self.consultorio_id,
+                "nome": nome,
+                "cor": str(cor or "#0284c7"),
+            }).execute()
+            if not resposta.data:
+                return False
+            self.registrar_evento_auditoria(
+                "INSERT", "pastas", resposta.data[0].get("id"), {"nome": nome}
+            )
+            return True
+        except Exception as erro:
+            print(f"Erro ao criar pasta: {type(erro).__name__}.")
+            return False
+
+    def renomear_pasta_interface(
+        self, nome_atual: str, nome_novo: str
+    ) -> bool:
+        if not self.supabase or self.consultorio_id is None:
+            return False
+        atual = " ".join(str(nome_atual or "").strip().split())
+        novo = " ".join(str(nome_novo or "").strip().split())
+        if (
+            not atual or not novo
+            or atual.casefold() == "geral"
+        ):
+            return False
+        try:
+            existentes = self.listar_pastas_interface()
+            if (
+                novo.casefold() != atual.casefold()
+                and novo.casefold() in {item.casefold() for item in existentes}
+            ):
+                return False
+            (
+                self.supabase.table("pacientes")
+                .update({"pasta": novo})
+                .eq("consultorio_id", self.consultorio_id)
+                .ilike("pasta", atual)
+                .is_("deleted_at", "null")
+                .execute()
+            )
+            resposta = (
+                self.supabase.table("pastas")
+                .update({"nome": novo})
+                .eq("consultorio_id", self.consultorio_id)
+                .ilike("nome", atual)
+                .execute()
+            )
+            if not resposta.data:
+                self.supabase.table("pastas").insert({
+                    "consultorio_id": self.consultorio_id,
+                    "nome": novo,
+                    "cor": "#0284c7",
+                }).execute()
+            self.registrar_evento_auditoria(
+                "UPDATE", "pastas", None,
+                {"nome_anterior": atual, "nome_novo": novo},
+            )
+            return True
+        except Exception as erro:
+            print(f"Erro ao renomear pasta: {type(erro).__name__}.")
+            return False
+
+    def excluir_pasta_interface(self, nome: str) -> bool:
+        if not self.supabase or self.consultorio_id is None:
+            return False
+        nome = " ".join(str(nome or "").strip().split())
+        if not nome or nome.casefold() == "geral":
+            return False
+        try:
+            (
+                self.supabase.table("pacientes")
+                .update({"pasta": "Geral"})
+                .eq("consultorio_id", self.consultorio_id)
+                .ilike("pasta", nome)
+                .is_("deleted_at", "null")
+                .execute()
+            )
+            (
+                self.supabase.table("pastas")
+                .delete()
+                .eq("consultorio_id", self.consultorio_id)
+                .ilike("nome", nome)
+                .execute()
+            )
+            self.registrar_evento_auditoria(
+                "DELETE", "pastas", None, {"nome": nome}
+            )
+            return True
+        except Exception as erro:
+            print(f"Erro ao excluir pasta: {type(erro).__name__}.")
+            return False
+
+    def atualizar_cor_pasta_interface(self, nome: str, cor: str) -> bool:
+        if not self.supabase or self.consultorio_id is None:
+            return False
+        nome = " ".join(str(nome or "").strip().split())
+        cor = str(cor or "").strip()
+        if not nome or not cor.startswith("#") or len(cor) != 7:
+            return False
+        try:
+            resposta = (
+                self.supabase.table("pastas")
+                .update({"cor": cor})
+                .eq("consultorio_id", self.consultorio_id)
+                .ilike("nome", nome)
+                .execute()
+            )
+            if not resposta.data:
+                inserida = self.supabase.table("pastas").insert({
+                    "consultorio_id": self.consultorio_id,
+                    "nome": nome,
+                    "cor": cor,
+                }).execute()
+                if not inserida.data:
+                    return False
+            return True
+        except Exception as erro:
+            print(f"Erro ao atualizar cor da pasta: {type(erro).__name__}.")
+            return False
+
+    def mover_paciente_pasta_interface(
+        self, paciente_id: int, pasta: str
+    ) -> bool:
+        if not self.supabase or self.consultorio_id is None or not paciente_id:
+            return False
+        pasta = " ".join(str(pasta or "").strip().split()) or "Geral"
+        try:
+            resposta = (
+                self.supabase.table("pacientes")
+                .update({"pasta": pasta})
+                .eq("id", int(paciente_id))
+                .eq("consultorio_id", self.consultorio_id)
+                .is_("deleted_at", "null")
+                .execute()
+            )
+            if not resposta.data:
+                return False
+            self.registrar_evento_auditoria(
+                "UPDATE", "pacientes", int(paciente_id), {"pasta": pasta}
+            )
+            return True
+        except Exception as erro:
+            print(f"Erro ao mover paciente: {type(erro).__name__}.")
+            return False
+
+    # --- INTERFACE QML DA AGENDA ---
+    def listar_agenda_interface(self, data_consulta: str) -> list[dict]:
+        """Lista os blocos de um dia, sempre limitados à clínica autenticada."""
+        if not self.supabase or self.consultorio_id is None:
+            return []
+        try:
+            resposta = (
+                self.supabase.table("agenda")
+                .select(
+                    "data, horario, paciente, status, procedimento, duracao_txt, "
+                    "observacao, tipo_bloco, slots_vinculados, retorno_id"
+                )
+                .eq("consultorio_id", int(self.consultorio_id))
+                .eq("data", str(data_consulta))
+                .order("horario")
+                .execute()
+            )
+            linhas = []
+            for item in resposta.data or []:
+                linha = dict(item)
+                slots = linha.get("slots_vinculados")
+                if isinstance(slots, str):
+                    try:
+                        linha["slots_vinculados"] = json.loads(slots)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        linha["slots_vinculados"] = []
+                linhas.append(linha)
+            return linhas
+        except Exception as erro:
+            print(f"Erro ao listar agenda para a interface: {type(erro).__name__}.")
+            return []
+
+    def listar_agenda_periodo_interface(
+        self, datas_consulta: list[str]
+    ) -> list[dict]:
+        """Lista vários dias em uma única consulta para as visões ampla da agenda."""
+        datas = sorted({
+            str(data_consulta).strip()
+            for data_consulta in datas_consulta
+            if str(data_consulta).strip()
+        })
+        if not datas or not self.supabase or self.consultorio_id is None:
+            return []
+        try:
+            resposta = (
+                self.supabase.table("agenda")
+                .select(
+                    "data, horario, paciente, status, procedimento, duracao_txt, "
+                    "observacao, tipo_bloco, slots_vinculados, retorno_id"
+                )
+                .eq("consultorio_id", int(self.consultorio_id))
+                .in_("data", datas)
+                .order("data")
+                .order("horario")
+                .execute()
+            )
+            linhas = []
+            for item in resposta.data or []:
+                linha = dict(item)
+                slots = linha.get("slots_vinculados")
+                if isinstance(slots, str):
+                    try:
+                        linha["slots_vinculados"] = json.loads(slots)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        linha["slots_vinculados"] = []
+                linhas.append(linha)
+            return linhas
+        except Exception as erro:
+            print(f"Erro ao listar período da agenda: {type(erro).__name__}.")
+            return []
+
+    def listar_tipos_consulta_interface(self) -> list[str]:
+        """Combina os tipos padrão com os tipos personalizados da clínica."""
+        from services.agenda_service import TIPOS_CONSULTA_PADRAO
+
+        tipos = list(TIPOS_CONSULTA_PADRAO)
+        try:
+            salvos = json.loads(
+                self.obter_configuracao(
+                    "agenda_tipos_consulta_personalizados", "[]"
+                ) or "[]"
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            salvos = []
+        chaves = {tipo.casefold() for tipo in tipos}
+        for tipo in salvos if isinstance(salvos, list) else []:
+            nome = " ".join(str(tipo or "").split())
+            if nome and nome.casefold() not in chaves:
+                tipos.append(nome)
+                chaves.add(nome.casefold())
+        return tipos
+
+    def salvar_agendamento_interface(
+        self, data_consulta: str, horario: str, dados: dict
+    ) -> dict:
+        """Cria uma consulta e informa claramente quando o horário está ocupado."""
+        if not self.supabase or self.consultorio_id is None:
+            return {"sucesso": False, "motivo": "erro"}
+
+        from services.agenda_service import slots_da_consulta
+
+        data_consulta = str(data_consulta)
+        horario = str(horario)
+        duracao = str(dados.get("duracao_txt") or "30 minutos")
+        slots = slots_da_consulta(horario, duracao)
+
+        def horarios_ocupados() -> list[str]:
+            resposta = (
+                self.supabase.table("agenda")
+                .select("horario")
+                .eq("consultorio_id", int(self.consultorio_id))
+                .eq("data", data_consulta)
+                .in_("horario", slots)
+                .execute()
+            )
+            return sorted({
+                str(item.get("horario") or "").strip()
+                for item in resposta.data or []
+                if str(item.get("horario") or "").strip()
+            })
+
+        try:
+            conflitos = horarios_ocupados()
+            if conflitos:
+                return {
+                    "sucesso": False,
+                    "motivo": "conflito",
+                    "data": data_consulta,
+                    "horarios": conflitos,
+                }
+
+            paciente = str(dados.get("paciente") or "").strip().upper()
+            payloads = []
+            for indice, slot in enumerate(slots):
+                principal = indice == 0
+                payloads.append({
+                    "consultorio_id": int(self.consultorio_id),
+                    "data": data_consulta,
+                    "horario": slot,
+                    "paciente": paciente,
+                    "status": str(dados.get("status") or "") if principal else "",
+                    "procedimento": (
+                        str(dados.get("procedimento") or "") if principal else ""
+                    ),
+                    "duracao_txt": duracao if principal else "",
+                    "observacao": (
+                        str(dados.get("observacao") or "") if principal else ""
+                    ),
+                    "tipo_bloco": "principal" if principal else "continua",
+                    "retorno_id": dados.get("retorno_id") if principal else None,
+                    "slots_vinculados": json.dumps(slots if principal else []),
+                })
+            self.supabase.table("agenda").insert(payloads).execute()
+
+            retorno_id = dados.get("retorno_id")
+            if retorno_id:
+                self.atualizar_status_retorno(int(retorno_id), "Agendado")
+            return {"sucesso": True}
+        except Exception as erro:
+            codigo = str(getattr(erro, "code", "") or "")
+            mensagem = str(erro)
+            if (
+                codigo == "23505"
+                or "agenda_horario_unico_por_consultorio" in mensagem
+                or "duplicate key" in mensagem.casefold()
+            ):
+                try:
+                    conflitos = horarios_ocupados() or slots
+                except Exception:
+                    conflitos = slots
+                return {
+                    "sucesso": False,
+                    "motivo": "conflito",
+                    "data": data_consulta,
+                    "horarios": conflitos,
+                }
+            print(f"Erro ao salvar agenda pela interface: {type(erro).__name__}.")
+            return {"sucesso": False, "motivo": "erro"}
+
+    def atualizar_status_agenda_interface(
+        self, data_consulta: str, horario: str, novo_status: str
+    ) -> bool:
+        """Atualiza uma consulta e mantém a decisão de retorno coerente."""
+        if not self.supabase or self.consultorio_id is None:
+            return False
+        try:
+            consulta = (
+                self.supabase.table("agenda")
+                .select("paciente, procedimento, retorno_id")
+                .eq("consultorio_id", int(self.consultorio_id))
+                .eq("data", str(data_consulta))
+                .eq("horario", str(horario))
+                .eq("tipo_bloco", "principal")
+                .maybe_single()
+                .execute()
+            )
+            dados = consulta.data or {}
+            if not dados:
+                return False
+
+            (
+                self.supabase.table("agenda")
+                .update({"status": str(novo_status)})
+                .eq("consultorio_id", int(self.consultorio_id))
+                .eq("data", str(data_consulta))
+                .eq("horario", str(horario))
+                .eq("tipo_bloco", "principal")
+                .execute()
+            )
+
+            retorno_id = dados.get("retorno_id")
+            if retorno_id:
+                if "Realizada" in novo_status:
+                    status_retorno = "Concluído"
+                elif "Cancelada" in novo_status or "Faltou" in novo_status:
+                    status_retorno = "Pendente"
+                else:
+                    status_retorno = "Agendado"
+                self.atualizar_status_retorno(int(retorno_id), status_retorno)
+            elif (
+                "Realizada" in novo_status
+                and str(dados.get("procedimento") or "").strip().casefold()
+                != "retorno"
+            ):
+                self.criar_retorno_pendente_da_consulta(
+                    str(dados.get("paciente") or ""),
+                    str(data_consulta),
+                    str(horario),
+                )
+            return True
+        except Exception as erro:
+            print(f"Erro ao atualizar agenda pela interface: {type(erro).__name__}.")
+            return False
+
+    # --- INTERFACE QML DAS FICHAS CLÍNICAS ---
+    def iniciar_consultas_no_horario_interface(
+        self, data_consulta: str, horario_atual: str
+    ) -> int:
+        """Coloca em atendimento consultas cujo horário acabou de começar."""
+        if not self.supabase or self.consultorio_id is None:
+            return 0
+
+        from services.agenda_service import (
+            consulta_deve_entrar_em_atendimento,
+            data_hora_da_consulta,
+        )
+
+        try:
+            momento_atual = data_hora_da_consulta(
+                str(data_consulta), str(horario_atual)
+            )
+            resposta = (
+                self.supabase.table("agenda")
+                .select("horario, status, duracao_txt")
+                .eq("consultorio_id", int(self.consultorio_id))
+                .eq("data", str(data_consulta))
+                .eq("tipo_bloco", "principal")
+                .execute()
+            )
+            atualizadas = 0
+            for item in resposta.data or []:
+                if not consulta_deve_entrar_em_atendimento(
+                    str(data_consulta),
+                    str(item.get("horario") or ""),
+                    str(item.get("duracao_txt") or "30 minutos"),
+                    str(item.get("status") or ""),
+                    momento_atual,
+                ):
+                    continue
+                if self.atualizar_status_agenda_interface(
+                    str(data_consulta),
+                    str(item.get("horario") or ""),
+                    "🏥 Em Atendimento",
+                ):
+                    atualizadas += 1
+            return atualizadas
+        except Exception as erro:
+            print(
+                "Erro ao sincronizar consultas em atendimento: "
+                f"{type(erro).__name__}."
+            )
+            return 0
+
+    def listar_pacientes_fichas_interface(self) -> list[dict]:
+        """Lista somente a identificação necessária para iniciar uma ficha."""
+        if (
+            not self.supabase
+            or self.consultorio_id is None
+            or self.obter_papel_atual() == "secretaria"
+        ):
+            return []
+        try:
+            resposta = (
+                self.supabase.table("pacientes")
+                .select("id, nome")
+                .eq("consultorio_id", int(self.consultorio_id))
+                .is_("deleted_at", "null")
+                .order("nome")
+                .execute()
+            )
+            return resposta.data or []
+        except Exception as erro:
+            print(f"Erro ao listar pacientes das fichas: {type(erro).__name__}.")
+            return []
+
+    def listar_modelos_fichas_interface(self) -> list[dict]:
+        """Retorna o modelo padrão e os modelos personalizados da clínica."""
+        from services.fichas_service import (
+            MODELO_PADRAO,
+            NOME_MODELO_PADRAO,
+            normalizar_estrutura,
+        )
+
+        modelos = [{
+            "nome": NOME_MODELO_PADRAO,
+            "estrutura": normalizar_estrutura(MODELO_PADRAO),
+        }]
+        if (
+            not self.supabase
+            or self.consultorio_id is None
+            or self.obter_papel_atual() == "secretaria"
+        ):
+            return modelos
+        try:
+            resposta = (
+                self.supabase.table("modelos_fichas")
+                .select("nome_modelo, estrutura_json")
+                .eq("consultorio_id", int(self.consultorio_id))
+                .order("id", desc=True)
+                .execute()
+            )
+            nomes = {NOME_MODELO_PADRAO.casefold()}
+            for item in resposta.data or []:
+                nome = str(item.get("nome_modelo") or "").strip()
+                if not nome or nome.casefold() in nomes:
+                    continue
+                estrutura = item.get("estrutura_json")
+                if isinstance(estrutura, str):
+                    try:
+                        estrutura = json.loads(estrutura)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        estrutura = []
+                modelos.append({
+                    "nome": nome,
+                    "estrutura": normalizar_estrutura(estrutura),
+                })
+                nomes.add(nome.casefold())
+            return modelos
+        except Exception as erro:
+            print(f"Erro ao listar modelos de ficha: {type(erro).__name__}.")
+            return modelos
+
+    def listar_historico_fichas_interface(
+        self, paciente_id: int
+    ) -> list[dict]:
+        """Lista fichas anteriores sem trazer todo o conteúdo clínico."""
+        if (
+            not self.supabase
+            or self.consultorio_id is None
+            or not paciente_id
+            or self.obter_papel_atual() == "secretaria"
+        ):
+            return []
+        try:
+            resposta = (
+                self.supabase.table("fichas_preenchidas")
+                .select("id, modelo_nome, data_atendimento, anexos")
+                .eq("consultorio_id", int(self.consultorio_id))
+                .eq("paciente_id", int(paciente_id))
+                .is_("deleted_at", "null")
+                .order("id", desc=True)
+                .execute()
+            )
+            historico = []
+            for item in resposta.data or []:
+                anexos = item.get("anexos") or []
+                if isinstance(anexos, str):
+                    try:
+                        anexos = json.loads(anexos)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        anexos = []
+                historico.append({
+                    "id": item.get("id"),
+                    "modelo_nome": item.get("modelo_nome") or "Ficha Clínica",
+                    "data_atendimento": item.get("data_atendimento") or "",
+                    "total_anexos": len(anexos) if isinstance(anexos, list) else 0,
+                })
+            return historico
+        except Exception as erro:
+            print(f"Erro ao listar histórico de fichas: {type(erro).__name__}.")
+            return []
+
+    def obter_ficha_interface(self, ficha_id: int) -> dict | None:
+        """Abre uma ficha existente e recupera a estrutura usada na interface."""
+        from services.fichas_service import normalizar_estrutura
+
+        if (
+            not self.supabase
+            or self.consultorio_id is None
+            or not ficha_id
+            or self.obter_papel_atual() == "secretaria"
+        ):
+            return None
+        try:
+            resposta = (
+                self.supabase.table("fichas_preenchidas")
+                .select(
+                    "id, paciente_id, modelo_nome, dados_respostas, "
+                    "data_atendimento, anexos"
+                )
+                .eq("id", int(ficha_id))
+                .eq("consultorio_id", int(self.consultorio_id))
+                .is_("deleted_at", "null")
+                .maybe_single()
+                .execute()
+            )
+            ficha = dict(resposta.data or {})
+            if not ficha:
+                return None
+            respostas = ficha.get("dados_respostas") or {}
+            if isinstance(respostas, str):
+                try:
+                    respostas = json.loads(respostas)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    respostas = {}
+            ficha["dados_respostas"] = respostas
+            ficha["anexos"] = _normalizar_anexos_ficha(
+                ficha.get("anexos")
+            )
+
+            nome_modelo = str(ficha.get("modelo_nome") or "")
+            modelos = self.listar_modelos_fichas_interface()
+            estrutura = next(
+                (
+                    modelo["estrutura"]
+                    for modelo in modelos
+                    if modelo["nome"] == nome_modelo
+                ),
+                None,
+            )
+            if estrutura is None:
+                estrutura = [
+                    {
+                        "tipo": (
+                            "checkbox" if isinstance(valor, bool) else "texto_longo"
+                        ),
+                        "id": campo_id,
+                        "label": str(campo_id).replace("_", " ").capitalize(),
+                    }
+                    for campo_id, valor in respostas.items()
+                ]
+            ficha["estrutura"] = normalizar_estrutura(estrutura)
+            return ficha
+        except Exception as erro:
+            print(f"Erro ao abrir ficha pela interface: {type(erro).__name__}.")
+            return None
+
+    def salvar_ficha_interface(
+        self,
+        ficha_id: int | None,
+        paciente_id: int,
+        modelo_nome: str,
+        respostas: dict,
+        caminhos_anexos: list[str] | None = None,
+        anexos_existentes: list[dict] | None = None,
+    ) -> int | None:
+        """Cria ou atualiza uma ficha no atendimento original."""
+        if (
+            not self.supabase
+            or self.consultorio_id is None
+            or not paciente_id
+            or self.obter_papel_atual() == "secretaria"
+        ):
+            return None
+        caminhos_enviados: list[str] = []
+        try:
+            anexos_finais = _normalizar_anexos_ficha(
+                anexos_existentes or []
+            )
+            anexos_anteriores: list[dict] = []
+            if ficha_id:
+                anterior = (
+                    self.supabase.table("fichas_preenchidas")
+                    .select("anexos")
+                    .eq("id", int(ficha_id))
+                    .eq("consultorio_id", int(self.consultorio_id))
+                    .eq("paciente_id", int(paciente_id))
+                    .maybe_single()
+                    .execute()
+                )
+                anexos_anteriores = _normalizar_anexos_ficha(
+                    (anterior.data or {}).get("anexos")
+                )
+
+            for caminho_local in caminhos_anexos or []:
+                if not os.path.isfile(caminho_local):
+                    raise ErroAnexoFicha(
+                        "Um dos arquivos selecionados não existe mais no computador."
+                    )
+                nome_original = os.path.basename(caminho_local)
+                extensao = os.path.splitext(nome_original)[1].lower()
+                if extensao not in EXTENSOES_ANEXO_FICHA:
+                    raise ErroAnexoFicha(
+                        f'O arquivo "{nome_original}" não é uma foto ou PDF suportado.'
+                    )
+                tamanho = os.path.getsize(caminho_local)
+                if tamanho <= 0:
+                    raise ErroAnexoFicha(
+                        f'O arquivo "{nome_original}" está vazio.'
+                    )
+                if tamanho > TAMANHO_MAXIMO_ANEXO_FICHA:
+                    raise ErroAnexoFicha(
+                        f'O arquivo "{nome_original}" ultrapassa o limite de 15 MB.'
+                    )
+                caminho_bucket = (
+                    f"{int(self.consultorio_id)}/{int(paciente_id)}/"
+                    f"{uuid.uuid4().hex}{extensao}"
+                )
+                tipo = mimetypes.guess_type(nome_original)[0] or "application/octet-stream"
+                with open(caminho_local, "rb") as arquivo:
+                    self.supabase.storage.from_("fichas-anexos").upload(
+                        caminho_bucket,
+                        arquivo.read(),
+                        {"content-type": tipo},
+                    )
+                caminhos_enviados.append(caminho_bucket)
+                anexos_finais.append({
+                    "nome": nome_original,
+                    "caminho": caminho_bucket,
+                    "tipo": tipo,
+                    "tamanho": tamanho,
+                })
+
+            if ficha_id:
+                atualizacao = {
+                    "dados_respostas": dict(respostas or {}),
+                    "anexos": anexos_finais,
+                }
+                (
+                    self.supabase.table("fichas_preenchidas")
+                    .update(atualizacao)
+                    .eq("id", int(ficha_id))
+                    .eq("consultorio_id", int(self.consultorio_id))
+                    .eq("paciente_id", int(paciente_id))
+                    .execute()
+                )
+                mantidos = {
+                    item["caminho"]
+                    for item in anexos_finais
+                    if item.get("caminho")
+                }
+                removidos = [
+                    item["caminho"]
+                    for item in anexos_anteriores
+                    if item.get("caminho") not in mantidos
+                ]
+                if removidos:
+                    try:
+                        self.supabase.storage.from_("fichas-anexos").remove(
+                            removidos
+                        )
+                    except Exception as erro_limpeza:
+                        print(
+                            "Aviso ao remover anexo antigo: "
+                            f"{type(erro_limpeza).__name__}."
+                        )
+                return int(ficha_id)
+
+            from datetime import datetime
+
+            payload = {
+                "consultorio_id": int(self.consultorio_id),
+                "paciente_id": int(paciente_id),
+                "modelo_nome": str(modelo_nome or "Ficha Clínica"),
+                "dados_respostas": dict(respostas or {}),
+                "data_atendimento": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                "anexos": anexos_finais,
+            }
+            resposta = (
+                self.supabase.table("fichas_preenchidas")
+                .insert(payload)
+                .execute()
+            )
+            linhas = resposta.data or []
+            return int(linhas[0]["id"]) if linhas else None
+        except ErroAnexoFicha:
+            if caminhos_enviados:
+                try:
+                    self.supabase.storage.from_("fichas-anexos").remove(
+                        caminhos_enviados
+                    )
+                except Exception:
+                    pass
+            raise
+        except Exception as erro:
+            if caminhos_enviados:
+                try:
+                    self.supabase.storage.from_("fichas-anexos").remove(
+                        caminhos_enviados
+                    )
+                except Exception:
+                    pass
+            print(
+                "Erro ao salvar ficha pela interface: "
+                f"{type(erro).__name__}: {erro}"
+            )
+            return None
+
+    def salvar_modelo_ficha_interface(
+        self, nome_modelo: str, estrutura: list[dict]
+    ) -> bool:
+        """Cria ou atualiza um modelo sem duplicar nomes na mesma clínica."""
+        if (
+            not self.supabase
+            or self.consultorio_id is None
+            or self.obter_papel_atual() == "secretaria"
+        ):
+            return False
+        nome = str(nome_modelo or "").strip()
+        if not nome or "padrão" in nome.casefold():
+            return False
+        try:
+            consultorio_id = int(self.consultorio_id)
+            existente = (
+                self.supabase.table("modelos_fichas")
+                .select("id")
+                .eq("consultorio_id", consultorio_id)
+                .eq("nome_modelo", nome)
+                .limit(1)
+                .execute()
+            )
+            primeiro = (existente.data or [None])[0]
+            if primeiro:
+                (
+                    self.supabase.table("modelos_fichas")
+                    .update({"estrutura_json": list(estrutura or [])})
+                    .eq("id", primeiro["id"])
+                    .eq("consultorio_id", consultorio_id)
+                    .execute()
+                )
+            else:
+                (
+                    self.supabase.table("modelos_fichas")
+                    .insert({
+                        "consultorio_id": consultorio_id,
+                        "nome_modelo": nome,
+                        "estrutura_json": list(estrutura or []),
+                    })
+                    .execute()
+                )
+            return True
+        except Exception as erro:
+            print(f"Erro ao salvar modelo pela interface: {type(erro).__name__}.")
+            return False
+
+    def excluir_modelo_ficha_interface(self, nome_modelo: str) -> bool:
+        """Exclui somente o modelo; fichas preenchidas permanecem preservadas."""
+        nome = str(nome_modelo or "").strip()
+        if (
+            not self.supabase
+            or self.consultorio_id is None
+            or not nome
+            or "padrão" in nome.casefold()
+            or self.obter_papel_atual() == "secretaria"
+        ):
+            return False
+        try:
+            (
+                self.supabase.table("modelos_fichas")
+                .delete()
+                .eq("consultorio_id", int(self.consultorio_id))
+                .eq("nome_modelo", nome)
+                .execute()
+            )
+            return True
+        except Exception as erro:
+            print(f"Erro ao excluir modelo pela interface: {type(erro).__name__}.")
+            return False
+
+    def criar_link_anexo_interface(self, caminho: str) -> str:
+        """Gera um endereço temporário para consultar um anexo protegido."""
+        if not self.supabase or not caminho:
+            return ""
+        try:
+            prefixo = f"{int(self.consultorio_id)}/"
+            if not str(caminho).startswith(prefixo):
+                return ""
+            resposta = (
+                self.supabase.storage.from_("fichas-anexos")
+                .create_signed_url(str(caminho), 120)
+            )
+            if isinstance(resposta, dict):
+                url = str(
+                    resposta.get("signedURL")
+                    or resposta.get("signedUrl")
+                    or resposta.get("signed_url")
+                    or ""
+                )
+            else:
+                url = str(
+                    getattr(resposta, "signed_url", "")
+                    or getattr(resposta, "signedURL", "")
+                    or resposta
+                    or ""
+                )
+            if url.startswith("/") and self.supabase_url:
+                return f"{self.supabase_url}{url}"
+            return url
+        except Exception as erro:
+            print(f"Erro ao abrir anexo pela interface: {type(erro).__name__}.")
+            return ""
+
+    # --- INTERFACE QML DO FINANCEIRO ---
+    def listar_financeiro_interface(self) -> dict:
+        """Carrega agenda e pagamentos da clínica para composição no serviço."""
+        if not self.supabase or self.consultorio_id is None:
+            return {"agenda": [], "pagamentos": []}
+        try:
+            consultorio_id = int(self.consultorio_id)
+            agenda = (
+                self.supabase.table("agenda")
+                .select("data, horario, paciente, procedimento, status")
+                .eq("consultorio_id", consultorio_id)
+                .eq("tipo_bloco", "principal")
+                .execute()
+            )
+            pagamentos = (
+                self.supabase.table("pagamentos_consultas")
+                .select("*")
+                .eq("consultorio_id", consultorio_id)
+                .execute()
+            )
+            return {
+                "agenda": agenda.data or [],
+                "pagamentos": pagamentos.data or [],
+            }
+        except Exception as erro:
+            print(f"Erro ao carregar financeiro pela interface: {type(erro).__name__}.")
+            return {"agenda": [], "pagamentos": [], "erro": True}
+
+    def salvar_pagamento_interface(self, payload: dict) -> bool:
+        """Cria ou atualiza o pagamento vinculado ao horário da agenda."""
+        if not self.supabase or self.consultorio_id is None:
+            return False
+        try:
+            consultorio_id = int(self.consultorio_id)
+            dados = dict(payload or {})
+            dados["consultorio_id"] = consultorio_id
+            agenda_data = str(dados.get("agenda_data") or "")
+            agenda_horario = str(dados.get("agenda_horario") or "")
+            if not agenda_data or not agenda_horario:
+                return False
+            tabela = self.supabase.table("pagamentos_consultas")
+            existente = (
+                tabela.select("id")
+                .eq("consultorio_id", consultorio_id)
+                .eq("agenda_data", agenda_data)
+                .eq("agenda_horario", agenda_horario)
+                .limit(1)
+                .execute()
+            )
+            primeiro = (existente.data or [None])[0]
+            if primeiro:
+                tabela.update(dados).eq("id", primeiro["id"]).execute()
+                acao = "UPDATE"
+            else:
+                tabela.insert(dados).execute()
+                acao = "INSERT"
+            if hasattr(self, "registrar_evento_auditoria"):
+                self.registrar_evento_auditoria(
+                    acao,
+                    "pagamentos_consultas",
+                    f"{agenda_data}:{agenda_horario}",
+                    {"status_pagamento": dados.get("status")},
+                )
+            return True
+        except Exception as erro:
+            print(f"Erro ao salvar pagamento pela interface: {type(erro).__name__}.")
+            return False
+
+    def listar_lembretes_whatsapp_interface(self) -> dict:
+        """Retorna acompanhamento e franquia sem expor credenciais da Meta."""
+        if not self.supabase or self.consultorio_id is None:
+            return {"lembretes": [], "resumo": "", "franquia": ""}
+        nomes_status = {
+            "pendente": "Aguardando envio",
+            "processando": "Em processamento",
+            "enviado": "Aguardando confirmação",
+            "falhou": "Falha no envio",
+            "cancelado": "Cancelado",
+            "ignorado": "Não enviado",
+        }
+        nomes_meta = {
+            "accepted": "Aceito pela Meta",
+            "sent": "Enviado ao WhatsApp",
+            "delivered": "Entregue",
+            "read": "Lido",
+            "failed": "Não entregue",
+        }
+        try:
+            resposta_franquia = self.supabase.rpc(
+                "resumo_franquia_lembretes_whatsapp",
+                {"p_consultorio_id": self.consultorio_id},
+            ).execute()
+            resumo = (resposta_franquia.data or [{}])[0]
+            limite = int(resumo.get("limite") or 0)
+            entregues = int(resumo.get("entregues") or 0)
+            reservados = int(resumo.get("reservados") or 0)
+            disponiveis = int(resumo.get("disponiveis") or 0)
+            franquia = (
+                f"{entregues} de {limite} entregues · "
+                f"{reservados} aguardando confirmação · "
+                f"{disponiveis} disponíveis"
+            )
+            resposta = (
+                self.supabase.table("lembretes_whatsapp")
+                .select(
+                    "agenda_data,agenda_horario,paciente_nome,procedimento,"
+                    "status,meta_status,ultimo_erro,criado_em"
+                )
+                .eq("consultorio_id", self.consultorio_id)
+                .order("criado_em", desc=True)
+                .limit(100)
+                .execute()
+            )
+            lembretes = []
+            totais = {
+                "pendente": 0, "processando": 0,
+                "enviado": 0, "falhou": 0,
+            }
+            for item in resposta.data or []:
+                status = str(item.get("status") or "pendente").lower()
+                meta_status = str(item.get("meta_status") or "").lower()
+                if status in totais:
+                    totais[status] += 1
+                lembretes.append({
+                    "consulta": (
+                        f"{item.get('agenda_data') or ''} às "
+                        f"{item.get('agenda_horario') or ''}"
+                    ),
+                    "paciente": str(item.get("paciente_nome") or "Paciente"),
+                    "procedimento": str(item.get("procedimento") or "Consulta"),
+                    "situacao": nomes_meta.get(
+                        meta_status, nomes_status.get(status, status.title())
+                    ),
+                    "detalhe": str(item.get("ultimo_erro") or "—"),
+                    "falhou": status == "falhou" or meta_status == "failed",
+                    "entregue": meta_status in {"delivered", "read"},
+                })
+            texto_resumo = (
+                f"{len(lembretes)} lembrete(s): "
+                f"{totais['pendente']} aguardando, "
+                f"{totais['enviado']} enviado(s) e "
+                f"{totais['falhou']} com falha."
+            )
+            return {
+                "lembretes": lembretes,
+                "resumo": texto_resumo,
+                "franquia": franquia,
+            }
+        except Exception as erro:
+            print(
+                "Erro ao listar lembretes para a interface "
+                f"({type(erro).__name__})."
+            )
+            return {"lembretes": [], "resumo": "", "franquia": ""}
