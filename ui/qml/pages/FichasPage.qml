@@ -20,12 +20,7 @@ Item {
     }
 
     function syncSelectors() {
-        for (let i = 0; i < patientBox.count; ++i) {
-            if (Number(patientBox.valueAt(i)) === fichasController.pacienteSelecionadoId) {
-                patientBox.currentIndex = i
-                break
-            }
-        }
+        patientBox.selectValue(fichasController.pacienteSelecionadoId)
         let modelIndex = modelBox.find(fichasController.modeloSelecionado)
         if (modelIndex >= 0)
             modelBox.currentIndex = modelIndex
@@ -37,7 +32,7 @@ Item {
         target: fichasController
 
         function onFormularioCarregado(values) {
-            page.answers = Object.assign({}, values)
+            page.answers = fichasController.recalcularRespostas(values)
             page.syncSelectors()
         }
 
@@ -84,14 +79,18 @@ Item {
                 }
 
                 Label { text: "Paciente"; color: "#475569"; font.pixelSize: 12 }
-                AppComboBox {
+                SearchableComboBox {
                     id: patientBox
                     Layout.fillWidth: true
                     model: fichasController.pacientes
                     textRole: "nome"
                     valueRole: "id"
+                    placeholderText: "Digite o início do nome do paciente"
+                    maximumVisibleItems: 7
                     enabled: !fichasController.editando
-                    onActivated: fichasController.selecionarPaciente(Number(currentValue))
+                    onActivated: function(index, value) {
+                        fichasController.selecionarPaciente(Number(value))
+                    }
                 }
 
                 Label { text: "Modelo de ficha"; color: "#475569"; font.pixelSize: 12 }
@@ -135,6 +134,17 @@ Item {
 
                 AppButton {
                     Layout.fillWidth: true
+                    text: "Digitalizar ficha preenchida"
+                    highlighted: true
+                    enabled: !fichasController.ocupado
+                             && patientBox.currentIndex >= 0
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Lê uma foto ou PDF e prepara campos e respostas para revisão"
+                    onClicked: fichasController.digitalizarFichaPreenchida()
+                }
+
+                AppButton {
+                    Layout.fillWidth: true
                     text: "Excluir modelo"
                     variant: "danger"
                     enabled: modelBox.currentText.toLowerCase().indexOf("padrão") < 0
@@ -163,7 +173,7 @@ Item {
                     font.pixelSize: 12
                 }
 
-                ListView {
+                SmoothListView {
                     id: historyList
                     Layout.fillWidth: true
                     Layout.fillHeight: true
@@ -271,7 +281,7 @@ Item {
                     }
                 }
 
-                ScrollView {
+                SmoothScrollView {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     clip: true
@@ -289,6 +299,10 @@ Item {
                                 fieldValue: page.answer(modelData.id || "")
                                 onEdited: function(value) {
                                     page.setAnswer(modelData.id, value)
+                                    page.answers = fichasController.registrarResposta(
+                                        modelData.id,
+                                        value
+                                    )
                                 }
                             }
                         }
@@ -478,7 +492,7 @@ Item {
                 font.pixelSize: 12
             }
 
-            ListView {
+            SmoothListView {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true

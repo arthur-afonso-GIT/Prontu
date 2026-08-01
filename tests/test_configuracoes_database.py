@@ -84,3 +84,27 @@ def test_salvar_configuracao_atualiza_sem_criar_duplicata():
     assert db.supabase.valores == {
         "whatsapp_mensagem_manual": "Mensagem nova",
     }
+
+
+def test_procedimentos_personalizados_podem_ser_criados_editados_e_excluidos():
+    db = _database_fake()
+
+    assert db.adicionar_tipo_consulta_interface("  Limpeza dental  ") is True
+    assert db.adicionar_tipo_consulta_interface("limpeza DENTAL") is False
+    assert "Limpeza dental" in db.listar_tipos_consulta_interface()
+
+    assert db.editar_tipo_consulta_interface(
+        "Limpeza dental", "Profilaxia"
+    ) is True
+    assert "Profilaxia" in db.listar_tipos_consulta_interface()
+    assert "Limpeza dental" not in db.listar_tipos_consulta_interface()
+
+    assert db.excluir_tipo_consulta_interface("profilaxia") is True
+    assert db.listar_tipos_consulta_personalizados_interface() == []
+
+
+def test_procedimentos_padrao_nao_podem_ser_renomeados_ou_excluidos():
+    db = _database_fake()
+
+    assert db.editar_tipo_consulta_interface("Retorno", "Revisão") is False
+    assert db.excluir_tipo_consulta_interface("Retorno") is False

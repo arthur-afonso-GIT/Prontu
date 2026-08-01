@@ -153,7 +153,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
-                ScrollView {
+                SmoothScrollView {
                     anchors.fill: parent
                     contentWidth: availableWidth
                     clip: true

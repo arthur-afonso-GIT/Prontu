@@ -49,7 +49,7 @@ Item {
         confirmationDialog.open()
     }
 
-    ScrollView {
+    SmoothScrollView {
         anchors.fill: parent
         clip: true
 
@@ -138,7 +138,7 @@ Item {
                             font.pixelSize: 12
                         }
 
-                        ListView {
+                        SmoothListView {
                             id: membersList
                             Layout.fillWidth: true
                             Layout.fillHeight: true
@@ -348,7 +348,7 @@ Item {
                         }
                     }
 
-                    ListView {
+                    SmoothListView {
                         id: invitesList
                         Layout.fillWidth: true
                         Layout.fillHeight: true

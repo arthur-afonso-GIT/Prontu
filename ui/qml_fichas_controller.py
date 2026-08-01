@@ -14,22 +14,25 @@ from PySide6.QtCore import (
     Slot,
     QUrl,
 )
-from PySide6.QtGui import QDesktopServices, QTextDocument
-from PySide6.QtPrintSupport import QPrinter
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QFileDialog
 
 from services.fichas_service import (
     MODELO_PADRAO,
     NOME_MODELO_PADRAO,
+    atualizar_respostas_calculadas,
+    exportar_ficha_pdf,
     exportar_ficha_word,
-    html_exportacao_ficha,
     nome_arquivo_exportacao,
+    normalizar_valor_campo,
     normalizar_estrutura,
     preparar_dados_exportacao,
     respostas_iniciais,
     validar_respostas,
 )
 from services.leitor_documentos import (
+    ErroDigitalizacao,
+    digitalizar_ficha,
     extrair_blocos_docx,
     extrair_blocos_pdf,
     interpretar_blocos,
@@ -82,6 +85,7 @@ class FichasController(QObject):
     feedback = Signal(str, str)
     formularioCarregado = Signal("QVariantMap")
     modeloImportado = Signal(str)
+    fichaDigitalizada = Signal(str, str)
     visualizacaoAnexosPronta = Signal(str)
     _resultado = Signal(object, object)
 
@@ -100,6 +104,7 @@ class FichasController(QObject):
         }]
         self._modelo_nome = NOME_MODELO_PADRAO
         self._campos = normalizar_estrutura(MODELO_PADRAO)
+        self._respostas_atuais = respostas_iniciais(self._campos)
         self._paciente_id = 0
         self._ficha_id = 0
         self._anexos_existentes: list[dict] = []
@@ -107,7 +112,30 @@ class FichasController(QObject):
         self._anexos_visualizacao: list[dict] = []
         self._construindo = False
         self._campos_construtor: list[dict] = []
+        self._digitalizando_ficha = False
+        self._respostas_digitalizadas_pendentes: dict | None = None
+        self._arquivo_digitalizado_pendente = ""
+        self._modelo_digitalizado_pendente = ""
         self._resultado.connect(self._receber_resultado)
+
+    def _publicar_formulario(self, respostas: dict | None = None) -> None:
+        """Substitui e publica a fonte confiável das respostas do formulário."""
+        self._respostas_atuais = atualizar_respostas_calculadas(
+            self._campos,
+            dict(respostas or {}),
+        )
+        self.formularioCarregado.emit(dict(self._respostas_atuais))
+
+    def _respostas_para_acao(self, respostas: dict | None = None) -> dict:
+        """Combina o estado da tela com as respostas já recebidas pelo controlador."""
+        resultado = dict(self._respostas_atuais)
+        try:
+            resultado.update(dict(respostas or {}))
+        except (TypeError, ValueError):
+            pass
+        resultado = atualizar_respostas_calculadas(self._campos, resultado)
+        self._respostas_atuais = dict(resultado)
+        return resultado
 
     @Property(QObject, constant=True)
     def historicoModel(self):
@@ -178,6 +206,10 @@ class FichasController(QObject):
     def camposConstrutor(self) -> list[dict]:
         return self._campos_construtor
 
+    @Property(bool, notify=estadoAlterado)
+    def digitalizandoFicha(self) -> bool:
+        return self._digitalizando_ficha
+
     def _definir_ocupado(self, valor: bool) -> None:
         if self._ocupado != valor:
             self._ocupado = valor
@@ -244,7 +276,7 @@ class FichasController(QObject):
         self._campos = normalizar_estrutura(modelo["estrutura"])
         self._ficha_id = 0
         self.estadoAlterado.emit()
-        self.formularioCarregado.emit(respostas_iniciais(self._campos))
+        self._publicar_formulario(respostas_iniciais(self._campos))
 
     @Slot()
     def novaFicha(self) -> None:
@@ -254,7 +286,7 @@ class FichasController(QObject):
         modelo = self._modelo_por_nome(self._modelo_nome)
         self._campos = normalizar_estrutura(modelo["estrutura"])
         self.estadoAlterado.emit()
-        self.formularioCarregado.emit(respostas_iniciais(self._campos))
+        self._publicar_formulario(respostas_iniciais(self._campos))
 
     @Slot(int)
     def abrirFicha(self, ficha_id: int) -> None:
@@ -322,6 +354,8 @@ class FichasController(QObject):
         if not caminho:
             return
 
+        self._limpar_digitalizacao_pendente()
+
         def tarefa():
             extensao = Path(caminho).suffix.casefold()
             blocos = (
@@ -334,6 +368,50 @@ class FichasController(QObject):
             )
 
         self._enviar("importar_modelo", tarefa)
+
+    @Slot()
+    def digitalizarFichaPreenchida(self) -> None:
+        if not self._paciente_id:
+            self.feedback.emit(
+                "warning",
+                "Selecione o paciente antes de digitalizar a ficha.",
+            )
+            return
+        caminho, _ = QFileDialog.getOpenFileName(
+            None,
+            "Digitalizar ficha preenchida",
+            "",
+            (
+                "Fotos e PDF (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp *.pdf);;"
+                "Imagens (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;"
+                "PDF (*.pdf)"
+            ),
+        )
+        if not caminho:
+            return
+
+        self._limpar_digitalizacao_pendente()
+
+        def tarefa():
+            resultado = digitalizar_ficha(caminho)
+            nome = f"Ficha digitalizada - {Path(caminho).stem}"
+            resumo = (
+                f"{len([campo for campo in resultado.campos if campo.get('tipo') != 'secao'])} "
+                f"campo(s) reconhecido(s)"
+            )
+            if resultado.modo == "ocr_local":
+                resumo += f" · confiança média {resultado.confianca_media:.0%}"
+            if resultado.avisos:
+                resumo += "\n" + "\n".join(resultado.avisos)
+            return {
+                "nome": nome,
+                "campos": normalizar_estrutura(resultado.campos),
+                "respostas": dict(resultado.respostas),
+                "arquivo": str(caminho),
+                "resumo": resumo,
+            }
+
+        self._enviar("digitalizar_ficha", tarefa)
 
     @Slot(int)
     def removerAnexo(self, indice: int) -> None:
@@ -412,12 +490,42 @@ class FichasController(QObject):
         )
         return preparar_dados_exportacao(
             self._campos,
-            dict(respostas or {}),
+            self._respostas_para_acao(respostas),
             paciente.get("nome") or "Paciente",
             self._modelo_nome,
             sessao.get("nome_clinica") or "",
             obter_profissional() or "",
         )
+
+    @Slot(str, object, "QVariantMap", result="QVariantMap")
+    def processarResposta(
+        self, campo_id: str, valor, respostas: dict
+    ) -> dict:
+        """Compatibilidade: combina a tela e registra a resposta editada."""
+        self._respostas_para_acao(respostas)
+        return self.registrarResposta(campo_id, valor)
+
+    @Slot(str, object, result="QVariantMap")
+    def registrarResposta(self, campo_id: str, valor) -> dict:
+        """Registra a resposta na fonte confiável e recalcula dependências."""
+        campo_id = str(campo_id or "")
+        resultado = dict(self._respostas_atuais)
+        campo = next(
+            (
+                item for item in self._campos
+                if str(item.get("id") or "") == campo_id
+            ),
+            {},
+        )
+        resultado[campo_id] = normalizar_valor_campo(campo, valor)
+        self._respostas_atuais = atualizar_respostas_calculadas(
+            self._campos, resultado
+        )
+        return dict(self._respostas_atuais)
+
+    @Slot("QVariantMap", result="QVariantMap")
+    def recalcularRespostas(self, respostas: dict) -> dict:
+        return self._respostas_para_acao(respostas)
 
     @Slot("QVariantMap")
     def exportarWord(self, respostas: dict) -> None:
@@ -436,8 +544,7 @@ class FichasController(QObject):
         if not caminho.casefold().endswith(".docx"):
             caminho += ".docx"
         try:
-            logo = Path(__file__).parent / "assets" / "prontu_logo.png"
-            exportar_ficha_word(dados, caminho, logo)
+            exportar_ficha_word(dados, caminho)
             self.feedback.emit("success", "Ficha exportada em Word com sucesso.")
         except Exception:
             self.feedback.emit(
@@ -462,12 +569,7 @@ class FichasController(QObject):
         if not caminho.casefold().endswith(".pdf"):
             caminho += ".pdf"
         try:
-            documento = QTextDocument()
-            documento.setHtml(html_exportacao_ficha(dados))
-            impressora = QPrinter(QPrinter.PrinterMode.HighResolution)
-            impressora.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-            impressora.setOutputFileName(caminho)
-            documento.print_(impressora)
+            exportar_ficha_pdf(dados, caminho)
             self.feedback.emit("success", "Ficha exportada em PDF com sucesso.")
         except Exception:
             self.feedback.emit(
@@ -477,6 +579,7 @@ class FichasController(QObject):
 
     @Slot(bool)
     def iniciarConstrutor(self, editar_atual: bool = False) -> None:
+        self._limpar_digitalizacao_pendente()
         modelo = self._modelo_por_nome(self._modelo_nome)
         if editar_atual and "padrão" in modelo["nome"].casefold():
             self.feedback.emit(
@@ -494,7 +597,14 @@ class FichasController(QObject):
     def cancelarConstrutor(self) -> None:
         self._construindo = False
         self._campos_construtor = []
+        self._limpar_digitalizacao_pendente()
         self.estadoAlterado.emit()
+
+    def _limpar_digitalizacao_pendente(self) -> None:
+        self._digitalizando_ficha = False
+        self._respostas_digitalizadas_pendentes = None
+        self._arquivo_digitalizado_pendente = ""
+        self._modelo_digitalizado_pendente = ""
 
     @Slot("QVariantMap")
     def adicionarCampoConstrutor(self, campo: dict) -> None:
@@ -569,7 +679,10 @@ class FichasController(QObject):
         if not paciente_id:
             self.feedback.emit("warning", "Selecione um paciente antes de salvar.")
             return
-        valido, vazios = validar_respostas(self._campos, dict(respostas or {}))
+        respostas_normalizadas = self._respostas_para_acao(respostas)
+        valido, vazios = validar_respostas(
+            self._campos, respostas_normalizadas
+        )
         if not valido:
             self.feedback.emit(
                 "warning",
@@ -584,7 +697,7 @@ class FichasController(QObject):
                 ficha_id,
                 paciente_id,
                 nome,
-                dict(respostas or {}),
+                respostas_normalizadas,
                 list(self._anexos_locais),
                 list(self._anexos_existentes),
             )
@@ -602,6 +715,11 @@ class FichasController(QObject):
             ):
                 self.feedback.emit("error", str(erro))
                 return
+            if operacao == "digitalizar_ficha" and isinstance(
+                erro, ErroDigitalizacao
+            ):
+                self.feedback.emit("error", str(erro))
+                return
             self.feedback.emit("error", "Não foi possível concluir esta operação.")
             return
 
@@ -615,7 +733,30 @@ class FichasController(QObject):
             self._modelo_nome = modelo["nome"]
             self._campos = normalizar_estrutura(modelo["estrutura"])
             self.estadoAlterado.emit()
-            self.formularioCarregado.emit(respostas_iniciais(self._campos))
+            digitalizacao_pronta = bool(
+                self._respostas_digitalizadas_pendentes is not None
+                and self._modelo_digitalizado_pendente
+                and self._modelo_nome == self._modelo_digitalizado_pendente
+            )
+            if digitalizacao_pronta:
+                respostas = respostas_iniciais(self._campos)
+                respostas.update(self._respostas_digitalizadas_pendentes or {})
+                self._ficha_id = 0
+                arquivo = self._arquivo_digitalizado_pendente
+                if arquivo and arquivo not in self._anexos_locais:
+                    self._anexos_locais.append(arquivo)
+                self._publicar_formulario(respostas)
+                self._limpar_digitalizacao_pendente()
+                self.estadoAlterado.emit()
+                self.feedback.emit(
+                    "success",
+                    (
+                        "Digitalização pronta. Confira as respostas antes de salvar. "
+                        "O arquivo original foi mantido como anexo."
+                    ),
+                )
+            else:
+                self._publicar_formulario(respostas_iniciais(self._campos))
             if self._paciente_id:
                 paciente_id = self._paciente_id
                 self._enviar(
@@ -646,7 +787,7 @@ class FichasController(QObject):
             self._anexos_existentes = list(anexos) if isinstance(anexos, list) else []
             self._anexos_locais = []
             self.estadoAlterado.emit()
-            self.formularioCarregado.emit(
+            self._publicar_formulario(
                 dict(ficha.get("dados_respostas") or {})
             )
             return
@@ -692,7 +833,7 @@ class FichasController(QObject):
                 else "Atendimento registrado com sucesso.",
             )
             paciente_id = self._paciente_id
-            self.formularioCarregado.emit(respostas_iniciais(self._campos))
+            self._publicar_formulario(respostas_iniciais(self._campos))
             if paciente_id:
                 self._enviar(
                     "historico",
@@ -725,6 +866,32 @@ class FichasController(QObject):
             self.modeloImportado.emit(str(nome))
             return
 
+        if operacao == "digitalizar_ficha":
+            dados = dict(resultado or {})
+            campos = list(dados.get("campos") or [])
+            if not campos:
+                self.feedback.emit(
+                    "warning",
+                    "Não encontramos campos e respostas nessa ficha.",
+                )
+                return
+            self._campos_construtor = campos
+            self._respostas_digitalizadas_pendentes = dict(
+                dados.get("respostas") or {}
+            )
+            self._arquivo_digitalizado_pendente = str(
+                dados.get("arquivo") or ""
+            )
+            self._modelo_digitalizado_pendente = str(dados.get("nome") or "")
+            self._digitalizando_ficha = True
+            self._construindo = True
+            self.estadoAlterado.emit()
+            self.fichaDigitalizada.emit(
+                self._modelo_digitalizado_pendente,
+                str(dados.get("resumo") or "Revise os campos reconhecidos."),
+            )
+            return
+
         if operacao == "salvar_modelo":
             sucesso, nome = resultado or (False, "")
             if not sucesso:
@@ -733,7 +900,10 @@ class FichasController(QObject):
             self._construindo = False
             self._campos_construtor = []
             self._modelo_nome = str(nome)
-            self.feedback.emit("success", "Modelo salvo e pronto para uso.")
+            if self._digitalizando_ficha:
+                self._modelo_digitalizado_pendente = str(nome)
+            else:
+                self.feedback.emit("success", "Modelo salvo e pronto para uso.")
             self.carregar()
             return
 

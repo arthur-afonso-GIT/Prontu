@@ -1,7 +1,9 @@
 import os
 import sys
 import json
+import logging
 import mimetypes
+import time
 import uuid
 import httpx
 from dotenv import load_dotenv
@@ -60,6 +62,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".prontu_config.json")
 
 EXTENSOES_ANEXO_FICHA = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
 TAMANHO_MAXIMO_ANEXO_FICHA = 15 * 1024 * 1024
+LOGGER = logging.getLogger("prontu")
 
 
 class ErroAnexoFicha(RuntimeError):
@@ -144,6 +147,35 @@ class Database:
             print("AVISO: Conexão não iniciada. Credenciais inválidas!")
 
         self._restaurar_sessao_local()
+
+    @staticmethod
+    def _executar_leitura_com_recuperacao(operacao, tentativas: int = 3):
+        """Repete leituras interrompidas antes de o Supabase concluir a resposta.
+
+        A recuperacao fica restrita a falhas de transporte. Erros reais de banco,
+        permissao ou validacao continuam sendo entregues imediatamente ao chamador.
+        """
+        total = max(1, int(tentativas or 1))
+        for numero in range(1, total + 1):
+            try:
+                return operacao()
+            except Exception as erro:
+                falha_transitoria = isinstance(erro, httpx.TransportError) or (
+                    type(erro).__name__ in {
+                        "RemoteProtocolError",
+                        "ReadError",
+                        "ConnectError",
+                        "ReadTimeout",
+                    }
+                )
+                if not falha_transitoria or numero >= total:
+                    raise
+                LOGGER.warning(
+                    "Leitura do Supabase interrompida; nova tentativa %s de %s.",
+                    numero + 1,
+                    total,
+                )
+                time.sleep(0.15 * numero)
 
     def _restaurar_sessao_local(self) -> None:
         """Restaura sessão segura; consultorio_id legado sozinho não autentica."""
@@ -633,23 +665,27 @@ class Database:
         if not self.supabase or self.consultorio_id is None:
             return []
         try:
-            resposta = (
-                self.supabase.table("retornos_pacientes")
-                .select("id, paciente_id, data_prevista, motivo, status")
-                .eq("consultorio_id", self.consultorio_id)
-                .eq("status", "Pendente")
-                .order("data_prevista", nullsfirst=False)
-                .limit(limite)
-                .execute()
+            resposta = self._executar_leitura_com_recuperacao(
+                lambda: (
+                    self.supabase.table("retornos_pacientes")
+                    .select("id, paciente_id, data_prevista, motivo, status")
+                    .eq("consultorio_id", self.consultorio_id)
+                    .eq("status", "Pendente")
+                    .order("data_prevista", nullsfirst=False)
+                    .limit(limite)
+                    .execute()
+                )
             )
             retornos = resposta.data or []
             ids = list({item.get("paciente_id") for item in retornos if item.get("paciente_id") is not None})
             if not ids:
                 return retornos
-            pacientes = (
-                self.supabase.table("pacientes").select("id, nome")
-                .eq("consultorio_id", self.consultorio_id).in_("id", ids)
-                .is_("deleted_at", "null").execute()
+            pacientes = self._executar_leitura_com_recuperacao(
+                lambda: (
+                    self.supabase.table("pacientes").select("id, nome")
+                    .eq("consultorio_id", self.consultorio_id).in_("id", ids)
+                    .is_("deleted_at", "null").execute()
+                )
             )
             nomes = {item["id"]: item.get("nome", "Paciente") for item in (pacientes.data or [])}
             for retorno in retornos:
@@ -1333,16 +1369,84 @@ class Database:
         if not self.supabase or self.consultorio_id is None or not paciente_id:
             return False
         pasta = " ".join(str(pasta or "").strip().split()) or "Geral"
+        papel = self.obter_papel_atual().strip().casefold()
         try:
-            resposta = (
-                self.supabase.table("pacientes")
-                .update({"pasta": pasta})
-                .eq("id", int(paciente_id))
-                .eq("consultorio_id", self.consultorio_id)
-                .is_("deleted_at", "null")
-                .execute()
+            # Mantém a grafia original da pasta exibida na interface. Isso
+            # evita criar variações apenas por diferença de maiúsculas.
+            pasta = next(
+                (
+                    item for item in self.listar_pastas_interface()
+                    if item.casefold() == pasta.casefold()
+                ),
+                pasta,
             )
-            if not resposta.data:
+
+            if papel in {"secretaria", "secretária"}:
+                # A secretária grava pelos RPCs restritos. Uma atualização
+                # direta pode ser rejeitada pela RLS sem devolver uma linha.
+                paciente = self.obter_paciente_secretaria(int(paciente_id))
+                if not paciente:
+                    LOGGER.warning(
+                        "Paciente não encontrado ao mover pasta | id=%s | papel=%s",
+                        int(paciente_id),
+                        papel,
+                    )
+                    return False
+                dados_atualizados = dict(paciente)
+                dados_atualizados["pasta"] = pasta
+                salvo_id = self.salvar_paciente_secretaria(
+                    int(paciente_id), dados_atualizados
+                )
+                if salvo_id != int(paciente_id):
+                    LOGGER.warning(
+                        "RPC não confirmou movimento de paciente | id=%s | pasta=%s",
+                        int(paciente_id),
+                        pasta,
+                    )
+                    return False
+                paciente_confirmado = self.obter_paciente_secretaria(
+                    int(paciente_id)
+                )
+                linhas = [paciente_confirmado] if paciente_confirmado else []
+            else:
+                (
+                    self.supabase.table("pacientes")
+                    .update({"pasta": pasta})
+                    .eq("id", int(paciente_id))
+                    .eq("consultorio_id", self.consultorio_id)
+                    .is_("deleted_at", "null")
+                    .execute()
+                )
+
+                # Algumas configurações do PostgREST não devolvem as
+                # linhas alteradas. Uma leitura curta confirma o resultado real.
+                confirmacao = (
+                    self.supabase.table("pacientes")
+                    .select("id,pasta")
+                    .eq("id", int(paciente_id))
+                    .eq("consultorio_id", self.consultorio_id)
+                    .is_("deleted_at", "null")
+                    .limit(1)
+                    .execute()
+                )
+                linhas = confirmacao.data or []
+            if not linhas:
+                LOGGER.warning(
+                    "Movimento de paciente não localizado após gravação | id=%s | pasta=%s",
+                    int(paciente_id),
+                    pasta,
+                )
+                return False
+            pasta_salva = " ".join(
+                str(linhas[0].get("pasta") or "").strip().split()
+            )
+            if pasta_salva.casefold() != pasta.casefold():
+                LOGGER.warning(
+                    "Movimento de paciente divergente | id=%s | esperada=%s | salva=%s",
+                    int(paciente_id),
+                    pasta,
+                    pasta_salva,
+                )
                 return False
             self.registrar_evento_auditoria(
                 "UPDATE", "pacientes", int(paciente_id), {"pasta": pasta}
@@ -1350,6 +1454,12 @@ class Database:
             return True
         except Exception as erro:
             print(f"Erro ao mover paciente: {type(erro).__name__}.")
+            LOGGER.exception(
+                "Falha ao mover paciente entre pastas | id=%s | pasta=%s | papel=%s",
+                int(paciente_id),
+                pasta,
+                papel,
+            )
             return False
 
     # --- INTERFACE QML DA AGENDA ---
@@ -1423,11 +1533,8 @@ class Database:
             print(f"Erro ao listar período da agenda: {type(erro).__name__}.")
             return []
 
-    def listar_tipos_consulta_interface(self) -> list[str]:
-        """Combina os tipos padrão com os tipos personalizados da clínica."""
-        from services.agenda_service import TIPOS_CONSULTA_PADRAO
-
-        tipos = list(TIPOS_CONSULTA_PADRAO)
+    def listar_tipos_consulta_personalizados_interface(self) -> list[str]:
+        """Retorna somente os procedimentos criados pela clínica."""
         try:
             salvos = json.loads(
                 self.obter_configuracao(
@@ -1436,13 +1543,87 @@ class Database:
             )
         except (TypeError, ValueError, json.JSONDecodeError):
             salvos = []
-        chaves = {tipo.casefold() for tipo in tipos}
+        tipos = []
+        chaves = set()
         for tipo in salvos if isinstance(salvos, list) else []:
             nome = " ".join(str(tipo or "").split())
             if nome and nome.casefold() not in chaves:
                 tipos.append(nome)
                 chaves.add(nome.casefold())
         return tipos
+
+    def _salvar_tipos_consulta_personalizados(
+        self, tipos: list[str]
+    ) -> bool:
+        return self.salvar_configuracao(
+            "agenda_tipos_consulta_personalizados",
+            json.dumps(tipos, ensure_ascii=False),
+        )
+
+    def listar_tipos_consulta_interface(self) -> list[str]:
+        """Combina os tipos padrão com os tipos personalizados da clínica."""
+        from services.agenda_service import TIPOS_CONSULTA_PADRAO
+
+        tipos = list(TIPOS_CONSULTA_PADRAO)
+        chaves = {tipo.casefold() for tipo in tipos}
+        for nome in self.listar_tipos_consulta_personalizados_interface():
+            if nome.casefold() not in chaves:
+                tipos.append(nome)
+                chaves.add(nome.casefold())
+        return tipos
+
+    def adicionar_tipo_consulta_interface(self, nome: str) -> bool:
+        """Adiciona um procedimento sem criar nomes duplicados."""
+        nome = " ".join(str(nome or "").split())
+        if not nome or len(nome) > 80:
+            return False
+        existentes = self.listar_tipos_consulta_interface()
+        if nome.casefold() in {item.casefold() for item in existentes}:
+            return False
+        personalizados = self.listar_tipos_consulta_personalizados_interface()
+        personalizados.append(nome)
+        return self._salvar_tipos_consulta_personalizados(personalizados)
+
+    def editar_tipo_consulta_interface(
+        self, nome_atual: str, nome_novo: str
+    ) -> bool:
+        """Renomeia somente um procedimento personalizado."""
+        nome_atual = " ".join(str(nome_atual or "").split())
+        nome_novo = " ".join(str(nome_novo or "").split())
+        if not nome_atual or not nome_novo or len(nome_novo) > 80:
+            return False
+        personalizados = self.listar_tipos_consulta_personalizados_interface()
+        indice = next(
+            (
+                indice
+                for indice, item in enumerate(personalizados)
+                if item.casefold() == nome_atual.casefold()
+            ),
+            None,
+        )
+        if indice is None:
+            return False
+        outros = {
+            item.casefold()
+            for item in self.listar_tipos_consulta_interface()
+            if item.casefold() != nome_atual.casefold()
+        }
+        if nome_novo.casefold() in outros:
+            return False
+        personalizados[indice] = nome_novo
+        return self._salvar_tipos_consulta_personalizados(personalizados)
+
+    def excluir_tipo_consulta_interface(self, nome: str) -> bool:
+        """Exclui somente um procedimento personalizado."""
+        nome = " ".join(str(nome or "").split())
+        personalizados = self.listar_tipos_consulta_personalizados_interface()
+        restantes = [
+            item for item in personalizados
+            if item.casefold() != nome.casefold()
+        ]
+        if len(restantes) == len(personalizados):
+            return False
+        return self._salvar_tipos_consulta_personalizados(restantes)
 
     def salvar_agendamento_interface(
         self, data_consulta: str, horario: str, dados: dict
@@ -2071,18 +2252,22 @@ class Database:
             return {"agenda": [], "pagamentos": []}
         try:
             consultorio_id = int(self.consultorio_id)
-            agenda = (
-                self.supabase.table("agenda")
-                .select("data, horario, paciente, procedimento, status")
-                .eq("consultorio_id", consultorio_id)
-                .eq("tipo_bloco", "principal")
-                .execute()
+            agenda = self._executar_leitura_com_recuperacao(
+                lambda: (
+                    self.supabase.table("agenda")
+                    .select("data, horario, paciente, procedimento, status")
+                    .eq("consultorio_id", consultorio_id)
+                    .eq("tipo_bloco", "principal")
+                    .execute()
+                )
             )
-            pagamentos = (
-                self.supabase.table("pagamentos_consultas")
-                .select("*")
-                .eq("consultorio_id", consultorio_id)
-                .execute()
+            pagamentos = self._executar_leitura_com_recuperacao(
+                lambda: (
+                    self.supabase.table("pagamentos_consultas")
+                    .select("*")
+                    .eq("consultorio_id", consultorio_id)
+                    .execute()
+                )
             )
             return {
                 "agenda": agenda.data or [],

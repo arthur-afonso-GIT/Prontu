@@ -6,6 +6,8 @@ Dialog {
     id: dialog
 
     property bool editingExisting: false
+    property bool reviewingDigitization: false
+    property string digitizationSummary: ""
     property int editingIndex: -1
 
     modal: true
@@ -17,6 +19,8 @@ Dialog {
 
     function begin(editExisting, selectedName) {
         editingExisting = editExisting
+        reviewingDigitization = false
+        digitizationSummary = ""
         editingIndex = -1
         modelName.text = editExisting ? selectedName : ""
         clearEditor()
@@ -88,8 +92,10 @@ Dialog {
                 anchors.rightMargin: 14
                 Label {
                     Layout.fillWidth: true
-                    text: dialog.editingExisting
-                          ? "Editar modelo de ficha" : "Criar modelo de ficha"
+                    text: dialog.reviewingDigitization
+                          ? "Revisar ficha digitalizada"
+                          : (dialog.editingExisting
+                             ? "Editar modelo de ficha" : "Criar modelo de ficha")
                     color: "#0f172a"
                     font.pixelSize: 19
                     font.weight: Font.Bold
@@ -228,6 +234,15 @@ Dialog {
                 Layout.fillHeight: true
                 spacing: 10
 
+                Label {
+                    Layout.fillWidth: true
+                    visible: dialog.reviewingDigitization
+                    text: dialog.digitizationSummary
+                          + "\nRevise nomes, tipos e opções. Depois, confira as respostas na ficha."
+                    color: "#475569"
+                    wrapMode: Text.WordWrap
+                }
+
                 AppTextField {
                     id: modelName
                     Layout.fillWidth: true
@@ -241,7 +256,7 @@ Dialog {
                     color: "#ffffff"
                     border.color: "#d9e3ef"
 
-                    ListView {
+                    SmoothListView {
                         id: fieldList
                         anchors.fill: parent
                         anchors.margins: 10
@@ -324,7 +339,9 @@ Dialog {
                         color: "#64748b"
                     }
                     AppButton {
-                        text: "Concluir e salvar modelo"
+                        text: dialog.reviewingDigitization
+                              ? "Concluir revisão e usar ficha"
+                              : "Concluir e salvar modelo"
                         highlighted: true
                         enabled: fieldList.count > 0 && modelName.text.trim().length > 0
                         onClicked: fichasController.salvarModelo(modelName.text)
@@ -342,6 +359,17 @@ Dialog {
         }
         function onModeloImportado(name) {
             dialog.editingExisting = false
+            dialog.reviewingDigitization = false
+            dialog.digitizationSummary = ""
+            dialog.editingIndex = -1
+            modelName.text = name
+            dialog.clearEditor()
+            dialog.open()
+        }
+        function onFichaDigitalizada(name, summary) {
+            dialog.editingExisting = false
+            dialog.reviewingDigitization = true
+            dialog.digitizationSummary = summary
             dialog.editingIndex = -1
             modelName.text = name
             dialog.clearEditor()

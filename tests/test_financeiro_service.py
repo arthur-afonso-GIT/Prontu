@@ -3,6 +3,7 @@ from datetime import date
 from services.financeiro_service import (
     calcular_resumo,
     calcular_status,
+    classificar_alerta_pagamentos,
     moeda_br,
     numero_monetario,
     preparar_registros,
@@ -69,3 +70,36 @@ def test_resumo_considera_apenas_mes_de_referencia():
 
     resumo = calcular_resumo(registros, date(2026, 7, 20))
     assert resumo == {"recebido": 0, "a_receber": 50, "consultas": 2}
+
+
+def test_alerta_financeiro_prioriza_atrasado_e_ignora_cancelado():
+    assert classificar_alerta_pagamentos([{
+        "status_consulta": "Agendado",
+        "status_pagamento": "Pendente",
+        "atrasado": False,
+    }]) == "pendente"
+
+    assert classificar_alerta_pagamentos([
+        {
+            "status_consulta": "Agendado",
+            "status_pagamento": "Pendente",
+            "atrasado": False,
+        },
+        {
+            "status_consulta": "Realizada",
+            "status_pagamento": "Parcial",
+            "atrasado": True,
+        },
+    ]) == "atrasado"
+
+    assert classificar_alerta_pagamentos([{
+        "status_consulta": "Cancelada",
+        "status_pagamento": "Pendente",
+        "atrasado": True,
+    }]) == ""
+
+    assert classificar_alerta_pagamentos([{
+        "status_consulta": "Realizada",
+        "status_pagamento": "Pago",
+        "atrasado": False,
+    }]) == ""

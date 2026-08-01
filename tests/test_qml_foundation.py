@@ -16,9 +16,18 @@ def test_entrada_oficial_qml_e_arquivos_principais_existem():
     assert (ROOT / "ui" / "qml" / "components" / "AppTextField.qml").is_file()
     assert (ROOT / "ui" / "qml" / "components" / "AppTextArea.qml").is_file()
     assert (ROOT / "ui" / "qml" / "components" / "AppComboBox.qml").is_file()
+    assert (
+        ROOT / "ui" / "qml" / "components" / "SearchableComboBox.qml"
+    ).is_file()
     assert (ROOT / "ui" / "qml" / "components" / "AppCheckBox.qml").is_file()
     assert (ROOT / "ui" / "qml" / "components" / "AppRadioButton.qml").is_file()
     assert (ROOT / "ui" / "qml" / "components" / "AppSpinBox.qml").is_file()
+    assert (
+        ROOT / "ui" / "qml" / "components" / "SmoothScrollView.qml"
+    ).is_file()
+    assert (
+        ROOT / "ui" / "qml" / "components" / "SmoothListView.qml"
+    ).is_file()
     assert (ROOT / "ui" / "qml" / "components" / "AgendaWeekView.qml").is_file()
     assert (ROOT / "ui" / "qml" / "components" / "AgendaMonthView.qml").is_file()
     assert (ROOT / "ui" / "qml" / "components" / "NavButton.qml").is_file()
@@ -39,6 +48,51 @@ def test_entrada_oficial_qml_e_arquivos_principais_existem():
     assert (ROOT / "ui" / "qml_equipe_controller.py").is_file()
     assert (ROOT / "ui" / "qml" / "pages" / "ConfiguracoesPage.qml").is_file()
     assert (ROOT / "ui" / "qml_configuracoes_controller.py").is_file()
+
+
+def test_paginas_principais_usam_rolagem_suave_padronizada():
+    components = ROOT / "ui" / "qml" / "components"
+    scroll = (components / "SmoothScrollView.qml").read_text(encoding="utf-8")
+    listing = (components / "SmoothListView.qml").read_text(encoding="utf-8")
+
+    for content in (scroll, listing):
+        assert "WheelHandler" in content
+        assert "NumberAnimation" in content
+        assert "Easing.OutCubic" in content
+        assert "Flickable.StopAtBounds" in content
+
+    for path in (
+        ROOT / "ui" / "qml" / "pages" / "HomePage.qml",
+        ROOT / "ui" / "qml" / "pages" / "ConfiguracoesPage.qml",
+        ROOT / "ui" / "qml" / "pages" / "EquipePage.qml",
+        ROOT / "ui" / "qml" / "components" / "PatientForm.qml",
+    ):
+        assert "SmoothScrollView {" in path.read_text(encoding="utf-8")
+
+
+def test_home_mantem_listas_rolaveis_e_arraste_identificavel():
+    conteudo = (
+        ROOT / "ui" / "qml" / "pages" / "HomePage.qml"
+    ).read_text(encoding="utf-8")
+
+    assert "id: appointmentsList" in conteudo
+    assert "id: returnsList" in conteudo
+    assert conteudo.count("ScrollBar.AlwaysOn") >= 2
+    assert 'Drag.keys: ["prontu-patient"]' in conteudo
+    assert 'keys: ["prontu-patient"]' in conteudo
+    assert "id: dragProxy" in conteudo
+    assert "target: dragProxy" in conteudo
+    assert "property int patientId: recentRow.patientId" in conteudo
+    assert "Drag.source: dragProxy" in conteudo
+    assert "drop.source.patientId" in conteudo
+    assert "drag.acceptProposedAction()" in conteudo
+    assert "dragHandler.centroid" in conteudo
+    assert ".pressPosition.x" in conteudo
+    assert "z: 1000" in conteudo
+    assert "function movePatientAtPosition" in conteudo
+    assert "foldersList.itemAtIndex(index)" in conteudo
+    assert "card.mapFromItem(dragItem, hotX, hotY)" in conteudo
+    assert "property bool dropHandled: false" in conteudo
 
 
 def test_main_e_a_unica_entrada_visual_do_aplicativo():
@@ -114,10 +168,50 @@ def test_seletores_e_senhas_qml_usam_componentes_padronizados():
     ]
     for path in consumers:
         content = path.read_text(encoding="utf-8")
-        assert "ComboBox {" not in content.replace("AppComboBox {", "")
+        standardized = content.replace("AppComboBox {", "")
+        standardized = standardized.replace("SearchableComboBox {", "")
+        assert "ComboBox {" not in standardized
         assert "CheckBox {" not in content.replace("AppCheckBox {", "")
         assert "RadioButton {" not in content.replace("AppRadioButton {", "")
         assert "SpinBox {" not in content.replace("AppSpinBox {", "")
+
+
+def test_agenda_tem_busca_incremental_e_rolavel_de_pacientes():
+    components = ROOT / "ui" / "qml" / "components"
+    searchable = (
+        components / "SearchableComboBox.qml"
+    ).read_text(encoding="utf-8")
+    agenda = (
+        ROOT / "ui" / "qml" / "pages" / "AgendaPage.qml"
+    ).read_text(encoding="utf-8")
+
+    assert "SearchableComboBox {" in agenda
+    assert "normalized(patientName).indexOf(query) === 0" in searchable
+    assert "onTextEdited: root.rebuildFilter(true)" in searchable
+    assert "ScrollBar.vertical: ScrollBar" in searchable
+    assert 'text: "Nenhum paciente encontrado"' in searchable
+    assert "function selectValue(value)" in searchable
+    assert "patientInput.selectValue(pendingReturnPatient)" in agenda
+    assert "patientInput.enabled = false" in agenda
+    assert 'text: page.pendingReturnId' in agenda
+
+
+def test_fichas_tem_busca_incremental_e_selecao_por_id():
+    fichas = (
+        ROOT / "ui" / "qml" / "pages" / "FichasPage.qml"
+    ).read_text(encoding="utf-8")
+    searchable = (
+        ROOT / "ui" / "qml" / "components" / "SearchableComboBox.qml"
+    ).read_text(encoding="utf-8")
+
+    assert "SearchableComboBox {" in fichas
+    assert 'textRole: "nome"' in fichas
+    assert 'valueRole: "id"' in fichas
+    assert "patientBox.selectValue(fichasController.pacienteSelecionadoId)" in fichas
+    assert "fichasController.selecionarPaciente(Number(value))" in fichas
+    assert 'property string textRole: ""' in searchable
+    assert 'property string valueRole: ""' in searchable
+    assert '"value": itemValue(source[index])' in searchable
 
 
 def test_arquivos_qml_estao_em_utf8_sem_texto_corrompido():
@@ -206,6 +300,24 @@ def test_qml_declara_responsividade_e_controle_de_permissao():
     assert '"pages/FinanceiroPage.qml"' in conteudo
     assert '"pages/EquipePage.qml"' in conteudo
     assert '"pages/ConfiguracoesPage.qml"' in conteudo
+
+
+def test_menu_financeiro_exibe_alerta_de_pagamentos():
+    principal = (
+        ROOT / "ui" / "qml" / "Main.qml"
+    ).read_text(encoding="utf-8")
+    navegacao = (
+        ROOT / "ui" / "qml" / "components" / "NavButton.qml"
+    ).read_text(encoding="utf-8")
+    controlador = (
+        ROOT / "ui" / "qml_financeiro_controller.py"
+    ).read_text(encoding="utf-8")
+
+    assert "alertaPagamentos" in controlador
+    assert 'alertaPagamentos === "atrasado"' in principal
+    assert 'indicatorColor:' in principal
+    assert 'window.financialEvents.carregar()' in principal
+    assert 'property bool indicatorVisible: false' in navegacao
 
 
 def test_qml_possui_fallback_durante_encerramento_dos_controladores():

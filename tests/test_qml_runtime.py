@@ -5,6 +5,8 @@ from PySide6.QtCore import QEventLoop, QObject, QTimer, QUrl
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication
 
+from database.database import Database
+from services.fichas_service import normalizar_estrutura, respostas_iniciais
 from ui.qml_controller import PatientsController, QmlAppController
 from ui.qml_agenda_controller import AgendaController
 from ui.qml_fichas_controller import FichasController
@@ -321,6 +323,125 @@ def test_tela_home_qml_carrega_resumo_e_listas():
     assert len(home_controller.pastas) == 1
 
 
+def test_home_move_paciente_para_pasta_com_id_e_nome_normalizados():
+    app = QApplication.instance() or QApplication([])
+    banco = _DatabaseFake()
+    movimentos = []
+
+    def mover(paciente_id, pasta):
+        movimentos.append((paciente_id, pasta))
+        return True
+
+    banco.mover_paciente_pasta_interface = mover
+    home_controller = HomeController(banco)
+    feedbacks = []
+    home_controller.feedback.connect(
+        lambda nivel, mensagem: feedbacks.append((nivel, mensagem))
+    )
+
+    home_controller.moverPaciente(1, "  Cardiologia  ")
+
+    espera = QEventLoop()
+    QTimer.singleShot(500, espera.quit)
+    espera.exec()
+
+    assert movimentos == [(1, "Cardiologia")]
+    assert any(nivel == "success" for nivel, _ in feedbacks)
+
+
+def test_home_move_paciente_atualiza_pasta_sem_remover_da_lista():
+    app = QApplication.instance() or QApplication([])
+    banco = _DatabaseFake()
+    paciente = {"id": 1, "nome": "Arthur", "pasta": "Geral"}
+
+    def listar_home():
+        return {
+            "pacientes": [dict(paciente)],
+            "pastas": [
+                {"nome": "Geral", "cor": "#0284c7"},
+                {"nome": "Cardiologia", "cor": "#0284c7"},
+            ],
+            "agenda": [],
+            "retornos": [],
+        }
+
+    def mover(paciente_id, pasta):
+        if paciente_id != paciente["id"]:
+            return False
+        paciente["pasta"] = pasta
+        return True
+
+    banco.listar_home_interface = listar_home
+    banco.mover_paciente_pasta_interface = mover
+    home_controller = HomeController(banco)
+
+    home_controller.carregar()
+    espera = QEventLoop()
+    QTimer.singleShot(250, espera.quit)
+    espera.exec()
+
+    home_controller.moverPaciente(1, "Cardiologia")
+    espera = QEventLoop()
+    QTimer.singleShot(500, espera.quit)
+    espera.exec()
+
+    assert home_controller.pacientesRecentes == [{
+        "id": 1,
+        "nome": "ARTHUR",
+        "pasta": "Cardiologia",
+    }]
+    pastas = {item["nome"]: item["quantidade"] for item in home_controller.pastas}
+    assert pastas == {"Geral": 1, "Cardiologia": 1}
+
+
+def test_database_move_paciente_secretaria_usa_rpc_e_confirma_pasta():
+    banco = Database.__new__(Database)
+    banco.supabase = object()
+    banco.consultorio_id = 7
+    paciente = {
+        "id": 12,
+        "nome": "Ana",
+        "telefone": "81999990000",
+        "nascimento": "2000-01-01",
+        "convenio": "PARTICULAR",
+        "pasta": "Geral",
+        "sexo": "Feminino",
+    }
+    auditoria = []
+
+    banco.obter_papel_atual = lambda: "secretaria"
+    banco.listar_pastas_interface = lambda: ["Geral", "Cardiologia"]
+    banco.obter_paciente_secretaria = lambda _paciente_id: dict(paciente)
+
+    def salvar(paciente_id, dados):
+        assert paciente_id == 12
+        paciente.update(dados)
+        return paciente_id
+
+    banco.salvar_paciente_secretaria = salvar
+    banco.registrar_evento_auditoria = (
+        lambda *args: auditoria.append(args)
+    )
+
+    assert banco.mover_paciente_pasta_interface(12, "cardiologia") is True
+    assert paciente["pasta"] == "Cardiologia"
+    assert auditoria
+
+
+def test_database_move_paciente_secretaria_nao_confirma_falso_sucesso():
+    banco = Database.__new__(Database)
+    banco.supabase = object()
+    banco.consultorio_id = 7
+    paciente = {"id": 12, "nome": "Ana", "pasta": "Geral"}
+
+    banco.obter_papel_atual = lambda: "secretaria"
+    banco.listar_pastas_interface = lambda: ["Geral", "Cardiologia"]
+    banco.obter_paciente_secretaria = lambda _paciente_id: dict(paciente)
+    banco.salvar_paciente_secretaria = lambda _paciente_id, _dados: None
+
+    assert banco.mover_paciente_pasta_interface(12, "Cardiologia") is False
+
+
 def test_tela_agenda_qml_carrega_com_consulta():
     app = QApplication.instance() or QApplication([])
     banco = _DatabaseFake()
@@ -428,6 +549,41 @@ def test_fichas_qml_carrega_anexos_do_historico_para_visualizacao():
     }]
 
 
+def test_fichas_registra_respostas_formata_data_e_exporta_estado_atual():
+    controller = FichasController(_DatabaseFake())
+    controller._pacientes = [{"id": 1, "nome": "Arthur"}]
+    controller._paciente_id = 1
+    controller._modelo_nome = "Nova ficha"
+    controller._campos = normalizar_estrutura([
+        {
+            "tipo": "texto_curto",
+            "id": "nome",
+            "label": "Nome",
+            "obrigatorio": True,
+        },
+        {
+            "tipo": "data",
+            "id": "nascimento",
+            "label": "Data de nascimento",
+        },
+        {"tipo": "numero", "id": "idade", "label": "Idade"},
+        {"tipo": "texto_longo", "id": "qp", "label": "QP"},
+    ])
+    controller._publicar_formulario(respostas_iniciais(controller._campos))
+
+    controller.registrarResposta("nome", "Arthur")
+    respostas = controller.registrarResposta("nascimento", "16022024")
+    controller.registrarResposta("qp", "Avaliação de rotina")
+    dados = controller._dados_exportacao({})
+
+    assert respostas["nascimento"] == "16/02/2024"
+    assert respostas["idade"].isdigit()
+    itens = {item["rotulo"]: item["valor"] for item in dados["itens"]}
+    assert itens["Nome"] == "Arthur"
+    assert itens["Data de nascimento"] == "16/02/2024"
+    assert itens["QP"] == "Avaliação de rotina"
+
+
 def test_fichas_qml_permite_remover_anexo_existente_antes_de_salvar():
     app = QApplication.instance() or QApplication([])
     controller = FichasController(_DatabaseFake())
@@ -446,6 +602,95 @@ def test_fichas_qml_permite_remover_anexo_existente_antes_de_salvar():
     controller.removerAnexo(0)
 
     assert controller.anexos == []
+
+
+def test_fichas_qml_exportacao_preserva_respostas_recebidas_da_tela():
+    app = QApplication.instance() or QApplication([])
+    controller = FichasController(_DatabaseFake())
+    controller._pacientes = [{"id": 1, "nome": "Arthur"}]
+    controller._paciente_id = 1
+    controller._campos = [{
+        "tipo": "texto_longo",
+        "id": "queixa",
+        "label": "Queixa principal",
+    }]
+    controller._publicar_formulario({})
+
+    controller.processarResposta("queixa", "Dor lombar", {})
+    dados = controller._dados_exportacao({})
+
+    assert dados is not None
+    assert dados["itens"][0]["valor"] == "Dor lombar"
+
+
+def test_fichas_qml_digitalizacao_revisa_modelo_e_carrega_respostas():
+    app = QApplication.instance() or QApplication([])
+
+    class _BancoDigitalizacao(_DatabaseFake):
+        def __init__(self):
+            self.modelos = super().listar_modelos_fichas_interface()
+
+        def listar_modelos_fichas_interface(self):
+            return list(self.modelos)
+
+        def salvar_modelo_ficha_interface(self, nome, estrutura):
+            self.modelos = [
+                modelo for modelo in self.modelos if modelo["nome"] != nome
+            ]
+            self.modelos.append({"nome": nome, "estrutura": estrutura})
+            return True
+
+    banco = _BancoDigitalizacao()
+    controller = FichasController(banco)
+    controller._paciente_id = 1
+    aberturas = []
+    controller.fichaDigitalizada.connect(
+        lambda nome, resumo: aberturas.append((nome, resumo))
+    )
+    controller._receber_resultado(("digitalizar_ficha", {
+        "nome": "Ficha digitalizada - teste",
+        "campos": [
+            {
+                "tipo": "data",
+                "id": "nascimento",
+                "label": "Data de nascimento",
+            },
+            {
+                "tipo": "texto_curto",
+                "id": "telefone",
+                "label": "Telefone",
+            },
+        ],
+        "respostas": {
+            "nascimento": "16052007",
+            "telefone": "81992124670",
+        },
+        "arquivo": "C:/ficha_teste.png",
+        "resumo": "2 campos reconhecidos",
+    }), None)
+
+    assert aberturas == [(
+        "Ficha digitalizada - teste", "2 campos reconhecidos"
+    )]
+    assert controller.digitalizandoFicha is True
+
+    controller.salvarModelo("Ficha digitalizada - teste")
+    espera = QEventLoop()
+    QTimer.singleShot(900, espera.quit)
+    espera.exec()
+
+    assert controller.modeloSelecionado == "Ficha digitalizada - teste"
+    assert controller._respostas_atuais["nascimento"] == "16/05/2007"
+    assert controller._respostas_atuais["telefone"] == "(81) 99212-4670"
+    assert controller.anexos[-1]["caminho"] == "C:/ficha_teste.png"
+    assert controller.digitalizandoFicha is False
+
+    dados_exportacao = controller._dados_exportacao({})
+    valores_exportados = {
+        item["rotulo"]: item["valor"] for item in dados_exportacao["itens"]
+    }
+    assert valores_exportados["Data de nascimento"] == "16/05/2007"
+    assert valores_exportados["Telefone"] == "(81) 99212-4670"
 
 
 def test_pacientes_qml_carrega_historico_e_visualiza_ficha_com_anexos():
@@ -477,6 +722,35 @@ def test_pacientes_qml_carrega_historico_e_visualiza_ficha_com_anexos():
         "nome": "exame.pdf",
         "caminho": "1/9/exame.pdf",
     }]
+
+
+def test_pacientes_abre_selecao_pendente_apos_carregar_lista():
+    app = QApplication.instance() or QApplication([])
+    banco = _DatabaseFake()
+    controller = PatientsController(banco)
+
+    controller._definir_ocupado(True)
+    controller.selecionar(1)
+    assert controller._selecao_pendente_id == 1
+
+    controller._receber_lista((banco.listar_pacientes_interface(), ["Geral"]), None)
+    espera = QEventLoop()
+    QTimer.singleShot(500, espera.quit)
+    espera.exec()
+
+    assert controller.pacienteSelecionado["id"] == 1
+    assert controller._selecao_pendente_id == 0
+
+
+def test_home_duplo_clique_solicita_abertura_do_paciente_correto():
+    app = QApplication.instance() or QApplication([])
+    controller = HomeController(_DatabaseFake())
+    solicitados = []
+    controller.abrirPacienteSolicitado.connect(solicitados.append)
+
+    controller.abrirPaciente(1)
+
+    assert solicitados == [1]
 
 
 def test_tela_financeiro_qml_carrega_consulta_sem_pagamento():

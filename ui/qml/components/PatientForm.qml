@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-ScrollView {
+SmoothScrollView {
     id: root
 
     property var controller
@@ -338,7 +338,7 @@ ScrollView {
             wrapMode: Text.WordWrap
         }
 
-        ListView {
+        SmoothListView {
             id: clinicalHistory
             visible: root.controller.podeVerDadosClinicos
                      && Boolean(root.patientId)

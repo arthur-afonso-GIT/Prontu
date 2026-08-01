@@ -234,6 +234,7 @@ class PatientsController(QObject):
         self._busca = ""
         self._pasta = "Todas as Pastas"
         self._ocupado = False
+        self._selecao_pendente_id = 0
         self._selecionado: dict = {}
         self._ficha_titulo = ""
         self._ficha_detalhes: list[dict] = []
@@ -349,13 +350,21 @@ class PatientsController(QObject):
 
     @Slot(int)
     def selecionar(self, paciente_id: int) -> None:
-        if self._ocupado or not paciente_id:
+        paciente_id = int(paciente_id or 0)
+        if not paciente_id:
             return
+        if self._ocupado:
+            # A página inicia carregando a lista. Um duplo clique vindo da
+            # Home pode chegar durante esse pequeno intervalo; nesse caso a
+            # seleção é executada assim que a lista terminar de carregar.
+            self._selecao_pendente_id = paciente_id
+            return
+        self._selecao_pendente_id = 0
 
         def tarefa():
-            paciente = self._database.obter_paciente_interface(int(paciente_id))
+            paciente = self._database.obter_paciente_interface(paciente_id)
             historico = (
-                self._database.listar_historico_fichas_interface(int(paciente_id))
+                self._database.listar_historico_fichas_interface(paciente_id)
                 if self.podeVerDadosClinicos
                 else []
             )
@@ -525,6 +534,10 @@ class PatientsController(QObject):
         nomes = ["Todas as Pastas", *(pastas or ["Geral"])]
         self._pastas = list(dict.fromkeys(nomes))
         self._aplicar_filtros()
+        paciente_pendente = self._selecao_pendente_id
+        if paciente_pendente:
+            self._selecao_pendente_id = 0
+            self.selecionar(paciente_pendente)
 
     @Slot(object, object)
     def _receber_paciente(self, paciente, erro) -> None:

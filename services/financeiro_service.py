@@ -123,3 +123,25 @@ def calcular_resumo(
         "a_receber": a_receber,
         "consultas": len(registros or []),
     }
+
+
+def classificar_alerta_pagamentos(registros: list[dict]) -> str:
+    """Resume as pendências para o indicador do menu Financeiro."""
+    tem_pendente = False
+    for registro in registros or []:
+        status_consulta = str(
+            registro.get("status_consulta") or ""
+        ).casefold()
+        if "cancel" in status_consulta:
+            continue
+
+        status_pagamento = str(
+            registro.get("status_pagamento") or ""
+        ).casefold()
+        if status_pagamento not in {"pendente", "parcial"}:
+            continue
+        if bool(registro.get("atrasado")):
+            return "atrasado"
+        tem_pendente = True
+
+    return "pendente" if tem_pendente else ""

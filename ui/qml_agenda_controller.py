@@ -216,6 +216,14 @@ class AgendaController(QObject):
     def procedimentos(self) -> list[str]:
         return self._procedimentos
 
+    @Property(list, notify=estadoAlterado)
+    def procedimentosPersonalizados(self) -> list[str]:
+        padroes = {item.casefold() for item in TIPOS_CONSULTA_PADRAO}
+        return [
+            item for item in self._procedimentos
+            if item.casefold() not in padroes
+        ]
+
     @Property(list, constant=True)
     def duracoes(self) -> list[str]:
         return DURACOES
@@ -436,10 +444,11 @@ class AgendaController(QObject):
             return
         paciente = str(formulario.get("paciente") or "").strip()
         horario = str(formulario.get("horario") or "").strip()
+        retorno_id = formulario.get("retorno_id")
         if not paciente:
             self.feedback.emit("warning", "Selecione um paciente cadastrado.")
             return
-        if paciente.casefold() not in {
+        if not retorno_id and paciente.casefold() not in {
             nome.casefold() for nome in self._pacientes
         }:
             self.feedback.emit(
@@ -458,7 +467,7 @@ class AgendaController(QObject):
             "status": str(formulario.get("status") or STATUS_CONSULTA[0]),
             "duracao_txt": str(formulario.get("duracao") or DURACOES[1]),
             "observacao": str(formulario.get("observacao") or "").strip(),
-            "retorno_id": formulario.get("retorno_id"),
+            "retorno_id": retorno_id,
         }
         data_consulta = self.dataSelecionada
         if horario_agendamento_ja_passou(data_consulta, horario):
@@ -499,6 +508,67 @@ class AgendaController(QObject):
     @Slot()
     def cancelarConsultaNoPassado(self) -> None:
         self._consulta_passada_pendente = None
+
+    @Slot(str)
+    def adicionarProcedimento(self, nome: str) -> None:
+        nome = " ".join(str(nome or "").split())
+        if not nome:
+            self.feedback.emit("warning", "Informe o nome do procedimento.")
+            return
+        if len(nome) > 80:
+            self.feedback.emit(
+                "warning", "Use um nome com no máximo 80 caracteres."
+            )
+            return
+        if self._ocupado:
+            return
+
+        def tarefa():
+            return (
+                "adicionar_procedimento",
+                self._database.adicionar_tipo_consulta_interface(nome),
+            )
+
+        self._enviar(tarefa, self._operacaoFinalizada)
+
+    @Slot(str, str)
+    def editarProcedimento(self, nome_atual: str, nome_novo: str) -> None:
+        nome_atual = " ".join(str(nome_atual or "").split())
+        nome_novo = " ".join(str(nome_novo or "").split())
+        if not nome_novo:
+            self.feedback.emit("warning", "Informe o novo nome do procedimento.")
+            return
+        if len(nome_novo) > 80:
+            self.feedback.emit(
+                "warning", "Use um nome com no máximo 80 caracteres."
+            )
+            return
+        if self._ocupado:
+            return
+
+        def tarefa():
+            return (
+                "editar_procedimento",
+                self._database.editar_tipo_consulta_interface(
+                    nome_atual, nome_novo
+                ),
+            )
+
+        self._enviar(tarefa, self._operacaoFinalizada)
+
+    @Slot(str)
+    def excluirProcedimento(self, nome: str) -> None:
+        nome = " ".join(str(nome or "").split())
+        if not nome or self._ocupado:
+            return
+
+        def tarefa():
+            return (
+                "excluir_procedimento",
+                self._database.excluir_tipo_consulta_interface(nome),
+            )
+
+        self._enviar(tarefa, self._operacaoFinalizada)
 
     @Slot(int, str, str)
     def prepararAgendamentoRetorno(
@@ -669,6 +739,9 @@ class AgendaController(QObject):
             {
                 "criar": "Consulta agendada com sucesso.",
                 "sem_retorno": "Decisão de retorno registrada.",
+                "adicionar_procedimento": "Procedimento adicionado.",
+                "editar_procedimento": "Procedimento atualizado.",
+                "excluir_procedimento": "Procedimento excluído.",
             }.get(operacao, "Status atualizado com sucesso."),
         )
         self.carregar()

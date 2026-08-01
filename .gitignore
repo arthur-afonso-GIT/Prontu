@@ -58,3 +58,5 @@ htmlcov/
 *.sql
 *.ts
 !supabase/functions/aceitar-convite/index.ts
+*.pdf
+*.ts

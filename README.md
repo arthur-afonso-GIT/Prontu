@@ -22,6 +22,7 @@ The product is designed to be delivered as a Windows application. End users shou
 - **Patient management** — searchable profiles, specialty folders, recent-patient shortcuts, clinical history, and follow-up scheduling.
 - **Patient import** — preview and import CSV or Excel files, with options to ignore or update existing records and normalized CPF matching.
 - **Clinical records** — create, fill, edit, review, archive, and export records linked to each patient.
+- **Assisted record digitization** — read printed forms from photos or scanned PDFs locally, review the detected fields and answers, keep the original as an attachment, and export the revised record.
 - **Template builder** — create custom record models with sections, text fields, dates, numbers, checkboxes, and multiple-choice inputs.
 - **Smart agenda** — daily and weekly calendar views, conflict prevention, custom procedures, status tracking, rescheduling, and direct access to the patient record.
 - **Financial follow-up** — appointments feed the payment panel automatically; received, pending, and overdue amounts are clearly identified.
@@ -76,7 +77,7 @@ These guides are designed for end users and do not require knowledge of Python, 
 | Desktop application | Python 3.11, PySide6 (Qt for Python) |
 | Cloud data | Supabase, PostgreSQL, Row Level Security |
 | Authentication and team operations | Supabase Auth, Supabase Edge Functions, TypeScript / Deno |
-| Documents | python-docx, PySide6 Qt Print Support, pypdf |
+| Documents and local OCR | python-docx, reportlab, pypdf, PyMuPDF, RapidOCR, ONNX Runtime |
 | Local security | cryptography, keyring |
 | Connectivity and configuration | httpx, python-dotenv |
 | Windows distribution | PyInstaller application bundle, Inno Setup installer, and optional Authenticode signing workflow |

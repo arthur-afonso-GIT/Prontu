@@ -32,12 +32,25 @@ ApplicationWindow {
         signal agendarRetornoSolicitado(var returnData)
     }
 
+    QtObject {
+        id: fallbackFinancialController
+
+        readonly property string alertaPagamentos: ""
+
+        function carregar() {}
+    }
+
     readonly property var controller:
         (typeof appController !== "undefined" && appController)
         ? appController : fallbackAppController
     readonly property var homeEvents:
         (typeof homeController !== "undefined" && homeController)
         ? homeController : fallbackHomeController
+    readonly property var financialEvents:
+        (typeof financeiroController !== "undefined" && financeiroController)
+        ? financeiroController : fallbackFinancialController
+
+    Component.onCompleted: window.financialEvents.carregar()
 
     Connections {
         target: window.homeEvents
@@ -77,6 +90,16 @@ ApplicationWindow {
                 if (agendaLoader.item)
                     agendaLoader.item.openReturn(returnData)
             })
+        }
+    }
+
+    Connections {
+        target: (typeof agendaController !== "undefined")
+                ? agendaController : null
+
+        function onFeedback(kind, _message) {
+            if (kind === "success")
+                window.financialEvents.carregar()
         }
     }
 
@@ -178,10 +201,24 @@ ApplicationWindow {
                         iconText: modelData.icon
                         compact: window.compactNavigation
                         selected: window.controller.paginaAtual === pageKey
+                        indicatorVisible: modelData.key === "financeiro"
+                                          && window.financialEvents.alertaPagamentos !== ""
+                        indicatorColor:
+                            window.financialEvents.alertaPagamentos === "atrasado"
+                            ? "#ef4444" : "#f59e0b"
                         onClicked: window.controller.navegar(pageKey)
 
                         ToolTip.visible: compact && hovered
-                        ToolTip.text: text
+                        ToolTip.text: {
+                            if (modelData.key !== "financeiro"
+                                    || !indicatorVisible)
+                                return text
+                            return text + (
+                                window.financialEvents.alertaPagamentos === "atrasado"
+                                ? " — há pagamento atrasado"
+                                : " — há pagamento pendente"
+                            )
+                        }
                         ToolTip.delay: 450
                     }
                 }

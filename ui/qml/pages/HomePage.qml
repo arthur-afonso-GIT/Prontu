@@ -32,7 +32,24 @@ Item {
         folderMenuDialog.open()
     }
 
-    ScrollView {
+    function movePatientAtPosition(patientId, dragItem, hotX, hotY) {
+        if (patientId <= 0 || !dragItem)
+            return false
+        for (let index = 0; index < foldersList.count; index++) {
+            const card = foldersList.itemAtIndex(index)
+            if (!card)
+                continue
+            const point = card.mapFromItem(dragItem, hotX, hotY)
+            if (point.x >= 0 && point.x <= card.width
+                    && point.y >= 0 && point.y <= card.height) {
+                homeController.moverPaciente(patientId, card.modelData.nome)
+                return true
+            }
+        }
+        return false
+    }
+
+    SmoothScrollView {
         anchors.fill: parent
         clip: true
 
@@ -250,10 +267,28 @@ Item {
                     DropArea {
                         id: dropArea
                         anchors.fill: parent
-                        onDropped: {
-                            if (page.draggedPatientId > 0)
+                        // Mantém a área receptora acima dos textos, ícones e
+                        // botões que compõem visualmente o cartão da pasta.
+                        z: 1000
+                        keys: ["prontu-patient"]
+                        onEntered: function(drag) {
+                            if (Number(drag.source
+                                       ? drag.source.patientId : 0) > 0
+                                    || page.draggedPatientId > 0)
+                                drag.acceptProposedAction()
+                        }
+                        onDropped: function(drop) {
+                            const sourceId = Number(drop.source
+                                                    ? drop.source.patientId : 0)
+                            const patientId = sourceId > 0
+                                    ? sourceId : page.draggedPatientId
+                            if (patientId > 0) {
                                 homeController.moverPaciente(
-                                    page.draggedPatientId, modelData.nome)
+                                    patientId, modelData.nome)
+                                if (drop.source)
+                                    drop.source.dropHandled = true
+                                drop.acceptProposedAction()
+                            }
                             page.draggedPatientId = 0
                         }
                     }
@@ -312,13 +347,20 @@ Item {
                                 Label { Layout.preferredWidth: 100; text: "Status"; color: "#52647c"; font.pixelSize: 11 }
                             }
                         }
-                        ListView {
+                        SmoothListView {
                             id: appointmentsList
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
                             model: homeController.consultas
-                            ScrollBar.vertical: ScrollBar {}
+                            reuseItems: true
+                            cacheBuffer: 160
+                            ScrollBar.vertical: ScrollBar {
+                                policy: appointmentsList.contentHeight
+                                        > appointmentsList.height
+                                        ? ScrollBar.AlwaysOn
+                                        : ScrollBar.AsNeeded
+                            }
 
                             delegate: Rectangle {
                                 required property var modelData
@@ -404,13 +446,20 @@ Item {
                                 Label { Layout.preferredWidth: 88; text: "Ação"; color: "#52647c"; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
                             }
                         }
-                        ListView {
+                        SmoothListView {
                             id: returnsList
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
                             model: homeController.retornos
-                            ScrollBar.vertical: ScrollBar {}
+                            reuseItems: true
+                            cacheBuffer: 160
+                            ScrollBar.vertical: ScrollBar {
+                                policy: returnsList.contentHeight
+                                        > returnsList.height
+                                        ? ScrollBar.AlwaysOn
+                                        : ScrollBar.AsNeeded
+                            }
 
                             delegate: Rectangle {
                                 required property var modelData
@@ -496,28 +545,33 @@ Item {
                                 Label { Layout.preferredWidth: 108; text: "Pasta"; color: "#52647c"; font.pixelSize: 11 }
                             }
                         }
-                        ListView {
+                        SmoothListView {
                             id: recentList
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            clip: true
+                            clip: page.draggedPatientId === 0
                             model: homeController.pacientesRecentes
-                            ScrollBar.vertical: ScrollBar {}
+                            reuseItems: true
+                            cacheBuffer: 160
+                            ScrollBar.vertical: ScrollBar {
+                                policy: recentList.contentHeight
+                                        > recentList.height
+                                        ? ScrollBar.AlwaysOn
+                                        : ScrollBar.AsNeeded
+                            }
 
                             delegate: Rectangle {
                                 id: recentRow
                                 required property var modelData
+                                property int patientId: Number(modelData.id || 0)
                                 width: recentList.width
                                 height: 43
                                 color: recentHover.hovered ? "#edf7ff" : "#ffffff"
                                 border.width: 1
                                 border.color: "#d4e0eb"
-                                opacity: dragHandler.active ? 0.65 : 1
-
-                                Drag.active: dragHandler.active
-                                Drag.source: recentRow
-                                Drag.hotSpot.x: width / 2
-                                Drag.hotSpot.y: height / 2
+                                opacity: dragHandler.active ? 0.88 : 1
+                                scale: dragHandler.active ? 1.02 : 1
+                                z: dragHandler.active ? 100 : 0
 
                                 RowLayout {
                                     anchors.fill: parent
@@ -537,9 +591,57 @@ Item {
                                         elide: Text.ElideRight
                                     }
                                 }
+                                Rectangle {
+                                    id: dragProxy
+                                    property int patientId: recentRow.patientId
+                                    property bool dropHandled: false
+                                    width: recentRow.width
+                                    height: recentRow.height
+                                    radius: 6
+                                    color: "#dff2ff"
+                                    border.width: 1
+                                    border.color: "#38a7e0"
+                                    opacity: dragHandler.active ? 0.72 : 0
+                                    visible: dragHandler.active
+                                    z: 200
+
+                                    Drag.active: dragHandler.active
+                                    // A fonte do evento precisa ser o mesmo item que
+                                    // efetivamente se move. Assim a pasta sempre recebe
+                                    // o ID do paciente, inclusive após rolagem da lista.
+                                    Drag.source: dragProxy
+                                    Drag.keys: ["prontu-patient"]
+                                    Drag.supportedActions: Qt.MoveAction
+                                    // O ponto de soltura acompanha exatamente o lugar
+                                    // onde o usuário segurou a linha. Antes ele ficava
+                                    // no centro do cartão largo e atingia a pasta apenas
+                                    // quando o mouse era deslocado para o lado.
+                                    Drag.hotSpot.x: Math.max(
+                                                        0, Math.min(
+                                                            width,
+                                                            dragHandler.centroid
+                                                            .pressPosition.x))
+                                    Drag.hotSpot.y: Math.max(
+                                                        0, Math.min(
+                                                            height,
+                                                            dragHandler.centroid
+                                                            .pressPosition.y))
+
+                                    Label {
+                                        anchors.centerIn: parent
+                                        width: parent.width - 24
+                                        text: recentRow.modelData.nome
+                                        color: "#075985"
+                                        font.weight: Font.DemiBold
+                                        horizontalAlignment: Text.AlignHCenter
+                                        elide: Text.ElideRight
+                                    }
+                                }
                                 HoverHandler {
                                     id: recentHover
-                                    cursorShape: Qt.PointingHandCursor
+                                    cursorShape: dragHandler.active
+                                                 ? Qt.ClosedHandCursor
+                                                 : Qt.OpenHandCursor
                                 }
                                 TapHandler {
                                     onDoubleTapped: homeController.abrirPaciente(
@@ -547,10 +649,37 @@ Item {
                                 }
                                 DragHandler {
                                     id: dragHandler
-                                    target: null
+                                    // Apenas a cópia visual se move. A linha permanece na
+                                    // tabela até o banco confirmar a mudança.
+                                    target: dragProxy
                                     onActiveChanged: {
-                                        page.draggedPatientId = active
-                                            ? modelData.id : 0
+                                        if (active) {
+                                            dragProxy.x = 0
+                                            dragProxy.y = 0
+                                            dragProxy.dropHandled = false
+                                            page.draggedPatientId =
+                                                    recentRow.patientId
+                                        } else {
+                                            const patientId = recentRow.patientId
+                                            const hotX = dragHandler.centroid
+                                                         .pressPosition.x
+                                            const hotY = dragHandler.centroid
+                                                         .pressPosition.y
+                                            Qt.callLater(function() {
+                                                // Caminho de confirmação independente
+                                                // de onDropped. Isso evita perder o gesto
+                                                // dentro de listas roláveis ou com escala.
+                                                if (!dragProxy.dropHandled)
+                                                    page.movePatientAtPosition(
+                                                        patientId, dragProxy,
+                                                        hotX, hotY)
+                                                dragProxy.x = 0
+                                                dragProxy.y = 0
+                                                if (page.draggedPatientId
+                                                        === recentRow.patientId)
+                                                    page.draggedPatientId = 0
+                                            })
+                                        }
                                     }
                                 }
                             }

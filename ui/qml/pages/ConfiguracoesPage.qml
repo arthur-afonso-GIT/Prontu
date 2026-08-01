@@ -86,7 +86,7 @@ Item {
         }
     }
 
-    ScrollView {
+    SmoothScrollView {
         anchors.fill: parent
         clip: true
 
@@ -287,7 +287,7 @@ Item {
                     color: "#ffffff"
                     border.color: "#d9e3ef"
 
-                    ScrollView {
+                    SmoothScrollView {
                         anchors.fill: parent
                         anchors.margins: 20
                         clip: true
@@ -383,7 +383,7 @@ Item {
                                 }
                             }
 
-                            ListView {
+                            SmoothListView {
                                 id: remindersList
                                 visible: page.controller.automacaoWhatsApp
                                 Layout.fillWidth: true
@@ -439,7 +439,7 @@ Item {
                     color: "#ffffff"
                     border.color: "#d9e3ef"
 
-                    ScrollView {
+                    SmoothScrollView {
                         anchors.fill: parent
                         anchors.margins: 20
                         clip: true
@@ -611,7 +611,7 @@ Item {
                             }
                         }
 
-                        ListView {
+                        SmoothListView {
                             id: auditList
                             Layout.fillWidth: true
                             Layout.fillHeight: true

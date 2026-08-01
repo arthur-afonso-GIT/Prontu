@@ -8,4 +8,8 @@ keyring
 pywin32
 python-docx
 pypdf
+reportlab
 openpyxl
+rapidocr>=3.8,<4
+onnxruntime>=1.20,<2
+PyMuPDF>=1.24,<2

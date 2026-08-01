@@ -68,18 +68,31 @@ Item {
         id: shortText
         AppTextField {
             id: input
+            readonly property bool isCalculated:
+                Boolean(root.fieldData.somente_leitura)
             placeholderText: root.fieldData.placeholder
                              || (root.fieldData.tipo === "data"
                                  ? "DD/MM/AAAA" : "")
+            readOnly: isCalculated
+            selectByMouse: true
+            color: isCalculated ? "#475569" : "#0f172a"
             inputMethodHints: root.fieldData.tipo === "numero"
+                              || root.fieldData.semantica === "data"
+                              || root.fieldData.semantica === "data_nascimento"
+                              || root.fieldData.semantica === "telefone"
+                              || root.fieldData.semantica === "cpf"
                               ? Qt.ImhFormattedNumbersOnly
                               : Qt.ImhNone
             Component.onCompleted: text = String(root.fieldValue ?? "")
             Connections {
                 target: root
                 function onFieldValueChanged() {
-                    if (!input.activeFocus)
-                        input.text = String(root.fieldValue ?? "")
+                    let nextValue = String(root.fieldValue ?? "")
+                    if (input.text !== nextValue) {
+                        input.text = nextValue
+                        if (input.activeFocus)
+                            input.cursorPosition = input.length
+                    }
                 }
             }
             onTextEdited: root.edited(text)

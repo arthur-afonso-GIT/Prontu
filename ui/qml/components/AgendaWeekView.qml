@@ -68,7 +68,7 @@ Item {
                             }
                         }
 
-                        ListView {
+                        SmoothListView {
                             id: dayAppointments
                             Layout.fillWidth: true
                             Layout.fillHeight: true

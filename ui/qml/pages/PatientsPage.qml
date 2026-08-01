@@ -164,7 +164,7 @@ Item {
                         }
                     }
 
-                    ListView {
+                    SmoothListView {
                         id: patientList
                         Layout.fillWidth: true
                         Layout.fillHeight: true
@@ -351,7 +351,7 @@ Item {
                 font.pixelSize: 12
             }
 
-            ScrollView {
+            SmoothScrollView {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
@@ -450,7 +450,7 @@ Item {
                 font.pixelSize: 12
             }
 
-            ListView {
+            SmoothListView {
                 id: patientAttachmentList
                 visible: patientsController.fichaVisualizacaoAnexos.length > 0
                 Layout.fillWidth: true

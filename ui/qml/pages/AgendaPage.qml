@@ -9,6 +9,7 @@ Item {
     property string statusFilter: ""
     property bool hideAvailable: false
     property int pendingReturnId: 0
+    property string pendingReturnPatient: ""
     property int returnDecisionId: 0
     property string returnDecisionPatient: ""
 
@@ -18,11 +19,12 @@ Item {
 
     function openNewAppointment(timeValue) {
         pendingReturnId = 0
+        pendingReturnPatient = ""
         appointmentTime.currentIndex = Math.max(
             0, agendaController.horarios.indexOf(timeValue || "08:00")
         )
-        patientInput.currentIndex = -1
-        patientInput.editText = ""
+        patientInput.enabled = true
+        patientInput.clearSelection()
         procedureInput.currentIndex = 0
         durationInput.currentIndex = 1
         statusInput.currentIndex = 0
@@ -32,10 +34,11 @@ Item {
 
     function openReturn(returnData) {
         pendingReturnId = Number(returnData.id || 0)
+        pendingReturnPatient = String(returnData.paciente_nome || "").trim()
         if (returnData.data_prevista)
             agendaController.definirData(returnData.data_texto)
-        patientInput.currentIndex = -1
-        patientInput.editText = returnData.paciente_nome || ""
+        patientInput.selectValue(pendingReturnPatient)
+        patientInput.enabled = false
         procedureInput.currentIndex = Math.max(
             0, agendaController.procedimentos.indexOf("Retorno"))
         durationInput.currentIndex = 1
@@ -261,7 +264,7 @@ Item {
                 border.width: 1
                 border.color: "#c5d4e3"
 
-                ListView {
+                SmoothListView {
                     id: scheduleList
                     anchors.fill: parent
                     anchors.margins: 1
@@ -458,14 +461,16 @@ Item {
             width: parent.width
             spacing: 10
 
-            Label { text: "Paciente cadastrado" }
-            AppComboBox {
+            Label {
+                text: page.pendingReturnId
+                      ? "Paciente do retorno"
+                      : "Paciente cadastrado"
+            }
+            SearchableComboBox {
                 id: patientInput
                 Layout.fillWidth: true
-                editable: true
                 model: agendaController.pacientes
-                selectTextByMouse: true
-                inputMethodHints: Qt.ImhNoPredictiveText
+                placeholderText: "Digite o início do nome do paciente"
             }
 
             RowLayout {
@@ -493,10 +498,21 @@ Item {
             }
 
             Label { text: "Procedimento / tipo de consulta" }
-            AppComboBox {
-                id: procedureInput
+            RowLayout {
                 Layout.fillWidth: true
-                model: agendaController.procedimentos
+                spacing: 8
+
+                AppComboBox {
+                    id: procedureInput
+                    Layout.fillWidth: true
+                    model: agendaController.procedimentos
+                }
+                AppButton {
+                    Layout.preferredWidth: 112
+                    text: "Gerenciar"
+                    variant: "secondary"
+                    onClicked: procedureManagerDialog.open()
+                }
             }
 
             Label { text: "Status inicial" }
@@ -527,7 +543,9 @@ Item {
                     variant: "primary"
                     enabled: !agendaController.ocupado
                     onClicked: agendaController.criarConsulta({
-                        paciente: patientInput.editText,
+                        paciente: page.pendingReturnId
+                                  ? page.pendingReturnPatient
+                                  : patientInput.editText,
                         horario: appointmentTime.currentText,
                         duracao: durationInput.currentText,
                         procedimento: procedureInput.currentText,
@@ -535,6 +553,225 @@ Item {
                         observacao: notesInput.text,
                         retorno_id: page.pendingReturnId || null
                     })
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: procedureManagerDialog
+        anchors.centerIn: parent
+        width: Math.min(540, page.width - 32)
+        modal: true
+        title: "Procedimentos da clínica"
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.CloseOnEscape
+
+        contentItem: ColumnLayout {
+            spacing: 12
+
+            Label {
+                Layout.fillWidth: true
+                text: "Crie os tipos usados pela clínica. Os tipos padrão do Prontu ficam protegidos."
+                wrapMode: Text.WordWrap
+                color: "#52647c"
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                AppTextField {
+                    id: newProcedureInput
+                    Layout.fillWidth: true
+                    placeholderText: "Ex.: Limpeza, Avaliação nutricional"
+                    maximumLength: 80
+                    onAccepted: {
+                        agendaController.adicionarProcedimento(text)
+                        text = ""
+                    }
+                }
+                AppButton {
+                    text: "Adicionar"
+                    variant: "primary"
+                    enabled: !agendaController.ocupado
+                             && newProcedureInput.text.trim().length > 0
+                    onClicked: {
+                        agendaController.adicionarProcedimento(
+                                    newProcedureInput.text)
+                        newProcedureInput.text = ""
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 46
+                visible: agendaController.procedimentosPersonalizados.length === 0
+                radius: 8
+                color: "#f8fafc"
+                border.width: 1
+                border.color: "#d7e2ed"
+                Label {
+                    anchors.centerIn: parent
+                    text: "Nenhum procedimento personalizado"
+                    color: "#64748b"
+                }
+            }
+
+            SmoothListView {
+                id: customProceduresList
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(
+                                            230,
+                                            Math.max(0, count * 52))
+                visible: count > 0
+                clip: true
+                model: agendaController.procedimentosPersonalizados
+                spacing: 6
+                ScrollBar.vertical: ScrollBar {
+                    policy: customProceduresList.contentHeight
+                            > customProceduresList.height
+                            ? ScrollBar.AlwaysOn
+                            : ScrollBar.AsNeeded
+                }
+
+                delegate: Rectangle {
+                    required property string modelData
+                    width: customProceduresList.width
+                    height: 46
+                    radius: 8
+                    color: "#f8fbfe"
+                    border.width: 1
+                    border.color: "#d7e2ed"
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 12
+                        anchors.rightMargin: 8
+                        spacing: 8
+                        Label {
+                            Layout.fillWidth: true
+                            text: modelData
+                            color: "#0f172a"
+                            elide: Text.ElideRight
+                        }
+                        AppButton {
+                            compact: true
+                            text: "Editar"
+                            variant: "secondary"
+                            onClicked: procedureEditDialog.openFor(modelData)
+                        }
+                        AppButton {
+                            compact: true
+                            text: "Excluir"
+                            variant: "danger"
+                            onClicked: procedureDeleteDialog.openFor(modelData)
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                AppButton {
+                    text: "Concluir"
+                    variant: "primary"
+                    onClicked: procedureManagerDialog.close()
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: procedureEditDialog
+        anchors.centerIn: parent
+        width: Math.min(430, page.width - 32)
+        modal: true
+        title: "Editar procedimento"
+        standardButtons: Dialog.NoButton
+        property string originalName: ""
+
+        function openFor(name) {
+            originalName = String(name || "")
+            editedProcedureInput.text = originalName
+            open()
+            editedProcedureInput.forceActiveFocus()
+            editedProcedureInput.selectAll()
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 12
+            Label { text: "Nome do procedimento" }
+            AppTextField {
+                id: editedProcedureInput
+                Layout.fillWidth: true
+                maximumLength: 80
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                AppButton {
+                    text: "Cancelar"
+                    variant: "ghost"
+                    onClicked: procedureEditDialog.close()
+                }
+                AppButton {
+                    text: "Salvar alteração"
+                    variant: "primary"
+                    enabled: !agendaController.ocupado
+                             && editedProcedureInput.text.trim().length > 0
+                    onClicked: {
+                        agendaController.editarProcedimento(
+                                    procedureEditDialog.originalName,
+                                    editedProcedureInput.text)
+                        procedureEditDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: procedureDeleteDialog
+        anchors.centerIn: parent
+        width: Math.min(430, page.width - 32)
+        modal: true
+        title: "Excluir procedimento"
+        standardButtons: Dialog.NoButton
+        property string procedureName: ""
+
+        function openFor(name) {
+            procedureName = String(name || "")
+            open()
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 14
+            Label {
+                Layout.fillWidth: true
+                text: "Deseja excluir “" + procedureDeleteDialog.procedureName
+                      + "”? As consultas já registradas não serão alteradas."
+                wrapMode: Text.WordWrap
+                color: "#334155"
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                AppButton {
+                    text: "Cancelar"
+                    variant: "ghost"
+                    onClicked: procedureDeleteDialog.close()
+                }
+                AppButton {
+                    text: "Excluir"
+                    variant: "danger"
+                    enabled: !agendaController.ocupado
+                    onClicked: {
+                        agendaController.excluirProcedimento(
+                                    procedureDeleteDialog.procedureName)
+                        procedureDeleteDialog.close()
+                    }
                 }
             }
         }

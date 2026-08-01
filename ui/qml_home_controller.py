@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
+import logging
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from services.home_service import normalizar_nome_pasta, preparar_home
+
+
+LOGGER = logging.getLogger("prontu")
 
 
 class HomeController(QObject):
@@ -130,6 +134,11 @@ class HomeController(QObject):
         if not nome:
             self.feedback.emit("warning", "Informe um nome para a pasta.")
             return
+        LOGGER.info(
+            "Movimento de paciente solicitado pela Home | id=%s | pasta=%s",
+            paciente_id,
+            pasta,
+        )
         self._enviar(
             "criar_pasta",
             lambda: self._database.criar_pasta_interface(nome, str(cor)),
@@ -166,12 +175,21 @@ class HomeController(QObject):
 
     @Slot(int, str)
     def moverPaciente(self, paciente_id: int, pasta: str) -> None:
+        paciente_id = int(paciente_id or 0)
+        pasta = normalizar_nome_pasta(pasta) or "Geral"
         if not paciente_id:
+            self.feedback.emit("warning", "Não foi possível identificar o paciente.")
+            return
+        if self._ocupado:
+            self.feedback.emit(
+                "warning",
+                "Aguarde a alteração anterior terminar e tente novamente.",
+            )
             return
         self._enviar(
             "mover_paciente",
             lambda: self._database.mover_paciente_pasta_interface(
-                int(paciente_id), str(pasta)
+                paciente_id, pasta
             ),
         )
 
@@ -208,4 +226,6 @@ class HomeController(QObject):
             "mover_paciente": "Paciente movido para a pasta.",
         }
         self.feedback.emit("success", mensagens.get(operacao, "Alteração salva."))
+        if operacao == "mover_paciente":
+            LOGGER.info("Movimento de paciente confirmado pela Home")
         self.carregar()

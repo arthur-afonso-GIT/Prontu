@@ -177,7 +177,7 @@ Item {
                         }
                     }
 
-                    ListView {
+                    SmoothListView {
                         id: financeList
                         Layout.fillWidth: true
                         Layout.fillHeight: true

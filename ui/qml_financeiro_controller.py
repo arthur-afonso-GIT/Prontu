@@ -16,6 +16,7 @@ from PySide6.QtCore import (
 from services.financeiro_service import (
     calcular_resumo,
     calcular_status,
+    classificar_alerta_pagamentos,
     moeda_br,
     numero_monetario,
     preparar_registros,
@@ -118,6 +119,10 @@ class FinanceiroController(QObject):
     @Property(int, notify=estadoAlterado)
     def consultasAgenda(self) -> int:
         return int(self._resumo["consultas"])
+
+    @Property(str, notify=estadoAlterado)
+    def alertaPagamentos(self) -> str:
+        return classificar_alerta_pagamentos(self._todos)
 
     @Property("QVariantMap", notify=estadoAlterado)
     def selecionado(self) -> dict:
