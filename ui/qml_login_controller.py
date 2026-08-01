@@ -216,10 +216,8 @@ class LoginController(QObject):
                 self.feedback.emit("success", "Login do proprietário criado.")
                 self._concluir_autenticacao()
             else:
-                self.feedback.emit(
-                    "error",
-                    "Esse e-mail pode já estar em uso. Tente outro e-mail.",
-                )
+                detalhe = self._database.obter_ultimo_erro_funcao()
+                self.feedback.emit("error", detalhe)
             return
 
         if operacao == "recuperar":

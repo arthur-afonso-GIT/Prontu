@@ -104,3 +104,21 @@ def test_cancelar_apos_validar_chave_remove_sessao_incompleta():
     assert banco.chave == "PRONTU-TESTE"
     assert banco.desativado is True
     assert controller.ativacaoPronta is False
+
+
+def test_criacao_proprietario_exibe_erro_real_do_servidor():
+    banco = _DatabaseLoginFake()
+    banco.criar_login_proprietario = lambda _email, _senha: False
+    mensagens = []
+    controller = LoginController(banco)
+    controller.feedback.connect(lambda tipo, texto: mensagens.append((tipo, texto)))
+
+    _esperar_sinal(
+        controller,
+        controller.feedback,
+        lambda: controller.criarProprietario(
+            "pessoa@clinica.com", "12345678", "12345678"
+        ),
+    )
+
+    assert mensagens[-1] == ("error", "Convite inválido.")

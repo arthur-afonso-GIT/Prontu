@@ -410,8 +410,18 @@ class Database:
         return self._adotar_sessao_de_login(resultado or {}, lembrar=True)
 
     def criar_login_proprietario(self, email: str, senha: str) -> bool:
+        sessao = getattr(self.session_manager, "_session", None) or {}
         resultado = self._chamar_funcao_auth("criar-acesso-proprietario", {
-            "email": email.strip(), "senha": senha,
+            # `senha` é o contrato atual. `password` mantém compatibilidade
+            # com versões anteriores da Edge Function já implantadas.
+            "email": email.strip().lower(),
+            "senha": senha,
+            "password": senha,
+            # Algumas versões já implantadas exigem estes campos no corpo,
+            # além de conferi-los novamente contra o JWT do dispositivo.
+            "consultorio_id": sessao.get("consultorio_id"),
+            "auth_user_id": sessao.get("auth_user_id"),
+            "device_id": getattr(self.session_manager, "device_id", None),
         }, usar_sessao=True)
         if resultado and resultado.get("access_token"):
             self._adotar_sessao_de_login(resultado, lembrar=True)
