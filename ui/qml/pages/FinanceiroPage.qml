@@ -5,6 +5,8 @@ import "../components"
 
 Item {
     id: page
+    objectName: "financeiroPage"
+    readonly property bool compactLayout: width < 900
 
     function updateAutomaticStatus() {
         let calculated = financeiroController.calcularStatus(
@@ -42,13 +44,20 @@ Item {
         }
     }
 
-    ColumnLayout {
+    SmoothScrollView {
+        id: pageScroll
         anchors.fill: parent
-        spacing: 14
+        contentWidth: availableWidth
 
-        RowLayout {
+        ColumnLayout {
+            width: pageScroll.availableWidth
+            spacing: 14
+
+        GridLayout {
             Layout.fillWidth: true
-            spacing: 12
+            columns: page.compactLayout ? 1 : 3
+            rowSpacing: 12
+            columnSpacing: 12
 
             Repeater {
                 model: [
@@ -75,6 +84,9 @@ Item {
                 delegate: Rectangle {
                     required property var modelData
                     Layout.fillWidth: true
+                    Layout.preferredWidth: page.compactLayout
+                                           ? pageScroll.availableWidth
+                                           : (pageScroll.availableWidth - 24) / 3
                     Layout.preferredHeight: 84
                     radius: 11
                     color: "#ffffff"
@@ -109,9 +121,11 @@ Item {
             }
         }
 
-        RowLayout {
+        GridLayout {
             Layout.fillWidth: true
-            spacing: 10
+            columns: page.compactLayout ? 1 : 2
+            rowSpacing: 10
+            columnSpacing: 10
 
             AppTextField {
                 Layout.fillWidth: true
@@ -119,20 +133,24 @@ Item {
                 onTextEdited: financeiroController.definirBusca(text)
             }
             AppComboBox {
-                Layout.preferredWidth: 190
+                Layout.fillWidth: page.compactLayout
+                Layout.preferredWidth: page.compactLayout ? -1 : 190
                 model: financeiroController.statusFiltros
                 onCurrentTextChanged: financeiroController.definirFiltroStatus(currentText)
             }
         }
 
-        RowLayout {
+        GridLayout {
             Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: 16
+            columns: page.compactLayout ? 1 : 2
+            rowSpacing: 16
+            columnSpacing: 16
 
             Rectangle {
                 Layout.fillWidth: true
-                Layout.fillHeight: true
+                Layout.preferredHeight: page.compactLayout
+                                        ? 320
+                                        : Math.max(420, page.height - 210)
                 radius: 12
                 color: "#ffffff"
                 border.color: "#d9e3ef"
@@ -283,8 +301,11 @@ Item {
             }
 
             Rectangle {
-                Layout.preferredWidth: 320
-                Layout.fillHeight: true
+                Layout.fillWidth: page.compactLayout
+                Layout.preferredWidth: page.compactLayout ? -1 : 320
+                Layout.preferredHeight: page.compactLayout
+                                        ? 500
+                                        : Math.max(420, page.height - 210)
                 radius: 12
                 color: "#ffffff"
                 border.color: "#d9e3ef"
@@ -368,6 +389,7 @@ Item {
                     }
                 }
             }
+        }
         }
     }
 

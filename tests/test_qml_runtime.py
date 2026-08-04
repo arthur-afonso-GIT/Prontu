@@ -257,6 +257,10 @@ def test_tela_pacientes_qml_carrega_com_modelo():
     app_controller.navegar("pacientes")
 
     engine = QQmlApplicationEngine()
+    avisos = []
+    engine.warnings.connect(
+        lambda lista: avisos.extend(item.toString() for item in lista)
+    )
     engine.rootContext().setContextProperty("appController", app_controller)
     engine.rootContext().setContextProperty(
         "patientsController", patients_controller
@@ -266,10 +270,13 @@ def test_tela_pacientes_qml_carrega_com_modelo():
     engine.load(QUrl.fromLocalFile(str(ROOT / "ui" / "qml" / "Main.qml")))
 
     espera = QEventLoop()
-    QTimer.singleShot(500, espera.quit)
+    QTimer.singleShot(1000, espera.quit)
     espera.exec()
 
     assert len(engine.rootObjects()) == 1
+    assert engine.rootObjects()[0].findChild(
+        QObject, "patientsPage"
+    ) is not None, avisos
     assert patients_controller.total == 1
 
 
@@ -346,6 +353,32 @@ def test_home_move_paciente_para_pasta_com_id_e_nome_normalizados():
     espera.exec()
 
     assert movimentos == [(1, "Cardiologia")]
+    assert any(nivel == "success" for nivel, _ in feedbacks)
+
+
+def test_home_cria_pasta_sem_interromper_antes_do_banco():
+    app = QApplication.instance() or QApplication([])
+    banco = _DatabaseFake()
+    pastas_criadas = []
+
+    def criar(nome, cor):
+        pastas_criadas.append((nome, cor))
+        return True
+
+    banco.criar_pasta_interface = criar
+    home_controller = HomeController(banco)
+    feedbacks = []
+    home_controller.feedback.connect(
+        lambda nivel, mensagem: feedbacks.append((nivel, mensagem))
+    )
+
+    home_controller.criarPasta("  Cardiologia  ", "#0284c7")
+
+    espera = QEventLoop()
+    QTimer.singleShot(500, espera.quit)
+    espera.exec()
+
+    assert pastas_criadas == [("Cardiologia", "#0284c7")]
     assert any(nivel == "success" for nivel, _ in feedbacks)
 
 
@@ -782,6 +815,9 @@ def test_tela_financeiro_qml_carrega_consulta_sem_pagamento():
     espera.exec()
 
     assert len(engine.rootObjects()) == 1
+    assert engine.rootObjects()[0].findChild(
+        QObject, "financeiroPage"
+    ) is not None
     assert financeiro_controller.total == 1
     assert financeiro_controller.consultasAgenda == 1
 
@@ -873,7 +909,7 @@ def test_tela_configuracoes_qml_carrega_perfil_e_plano():
     "equipe",
     "configuracoes",
 ])
-@pytest.mark.parametrize("tamanho", [(900, 620), (1440, 900)])
+@pytest.mark.parametrize("tamanho", [(720, 500), (900, 620), (1440, 900)])
 def test_todas_as_paginas_qml_abrem_em_resolucoes_suportadas(
     pagina, tamanho
 ):
@@ -911,8 +947,8 @@ def test_todas_as_paginas_qml_abrem_em_resolucoes_suportadas(
     reajuste = QEventLoop()
     QTimer.singleShot(100, reajuste.quit)
     reajuste.exec()
-    assert janela.width >= 900
-    assert janela.height >= 620
+    assert janela.width >= tamanho[0]
+    assert janela.height >= tamanho[1]
     assert app_controller.paginaAtual == pagina
     janela.close()
 

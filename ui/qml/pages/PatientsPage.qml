@@ -5,8 +5,10 @@ import "../components"
 
 Item {
     id: page
+    objectName: "patientsPage"
 
     readonly property bool wideLayout: width >= 1000
+    readonly property bool compactToolbar: width < 720
     property int pendingDeleteId: 0
     property string pendingDeleteName: ""
     property string requestedFolder: ""
@@ -71,24 +73,29 @@ Item {
         anchors.fill: parent
         spacing: 14
 
-        RowLayout {
+        GridLayout {
             Layout.fillWidth: true
-            spacing: 10
+            columns: page.compactToolbar ? 2 : 3
+            rowSpacing: 10
+            columnSpacing: 10
 
             AppTextField {
                 Layout.fillWidth: true
+                Layout.columnSpan: page.compactToolbar ? 2 : 1
                 placeholderText: "Buscar por nome, CPF, RG ou telefone"
                 onTextEdited: patientsController.definirBusca(text)
             }
 
             AppComboBox {
                 id: folderFilter
+                Layout.fillWidth: page.compactToolbar
                 Layout.preferredWidth: page.width < 900 ? 170 : 220
                 model: patientsController.pastas
                 onCurrentTextChanged: patientsController.definirPasta(currentText)
             }
 
             AppButton {
+                Layout.fillWidth: page.compactToolbar
                 text: "Novo paciente"
                 highlighted: true
                 onClicked: page.newPatient()

@@ -14,7 +14,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 
 from dotenv import load_dotenv
-from PySide6.QtCore import QEventLoop, QUrl
+from PySide6.QtCore import QEventLoop, QSize, QUrl
 from PySide6.QtGui import QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication
@@ -73,6 +73,30 @@ def _recursos_ausentes() -> list[str]:
         LOGO_PATH,
     )
     return [str(caminho) for caminho in obrigatorios if not caminho.is_file()]
+
+
+def _ajustar_janela_ao_monitor(janela, app: QApplication) -> None:
+    """Mantém a janela utilizável em notebooks, DPI alto e monitores menores."""
+    tela = janela.screen() or app.primaryScreen()
+    if tela is None:
+        return
+
+    area = tela.availableGeometry()
+    margem = 24
+    largura_disponivel = max(1, area.width() - margem)
+    altura_disponivel = max(1, area.height() - margem)
+    largura_minima = min(720, largura_disponivel)
+    altura_minima = min(500, altura_disponivel)
+
+    janela.setMinimumSize(QSize(largura_minima, altura_minima))
+    janela.resize(
+        min(1280, largura_disponivel),
+        min(800, altura_disponivel),
+    )
+
+    geometria = janela.frameGeometry()
+    geometria.moveCenter(area.center())
+    janela.setPosition(geometria.topLeft())
 
 
 def validar_instalacao() -> int:
@@ -165,6 +189,8 @@ def executar_aplicativo() -> int:
     if not engine.rootObjects():
         logger.error("Não foi possível carregar a janela principal")
         return 1
+
+    _ajustar_janela_ao_monitor(engine.rootObjects()[0], app)
 
     logger.info("Aplicativo iniciado | versão=%s", APP_VERSION)
     codigo_saida = app.exec()

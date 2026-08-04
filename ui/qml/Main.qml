@@ -105,8 +105,8 @@ ApplicationWindow {
 
     width: 1280
     height: 800
-    minimumWidth: 900
-    minimumHeight: 620
+    minimumWidth: 720
+    minimumHeight: 500
     visible: true
     title: "Prontu — Gerenciamento Inteligente"
     color: "#f5f8fc"
@@ -270,8 +270,9 @@ ApplicationWindow {
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: window.width < 1100 ? 22 : 32
-                spacing: 22
+                anchors.margins: window.width < 900 ? 14
+                                 : window.width < 1100 ? 22 : 32
+                spacing: window.height < 680 ? 14 : 22
 
                 RowLayout {
                     Layout.fillWidth: true
@@ -294,6 +295,7 @@ ApplicationWindow {
                     }
 
                     Rectangle {
+                        visible: window.width >= 820
                         implicitWidth: statusContent.implicitWidth + 28
                         implicitHeight: 36
                         radius: 18

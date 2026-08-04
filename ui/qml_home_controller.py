@@ -135,9 +135,9 @@ class HomeController(QObject):
             self.feedback.emit("warning", "Informe um nome para a pasta.")
             return
         LOGGER.info(
-            "Movimento de paciente solicitado pela Home | id=%s | pasta=%s",
-            paciente_id,
-            pasta,
+            "Criação de pasta solicitada pela Home | nome=%s | cor=%s",
+            nome,
+            cor,
         )
         self._enviar(
             "criar_pasta",
