@@ -2,10 +2,19 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import (
+    QCoreApplication,
+    Property,
+    QObject,
+    QStandardPaths,
+    QUrl,
+    Signal,
+    Slot,
+)
+from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import QFileDialog
 
 from services.backup_crypto import BackupCryptoError, BackupIntegrityError
@@ -16,7 +25,12 @@ from services.configuracoes_service import (
     preparar_configuracoes,
     validar_senhas_backup,
 )
-from utils.diagnostics import log_file_path
+from utils.diagnostics import (
+    check_connectivity,
+    export_support_diagnostic,
+    log_file_path,
+    recent_technical_events,
+)
 
 
 class ConfiguracoesController(QObject):
@@ -251,6 +265,58 @@ class ConfiguracoesController(QObject):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(pasta)))
 
     @Slot()
+    def gerarDiagnosticoSuporte(self) -> None:
+        if self._ocupado:
+            return
+
+        downloads = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.DownloadLocation
+        )
+        nome = f"Prontu-Diagnostico-{datetime.now():%Y%m%d-%H%M%S}.txt"
+        sugerido = str(Path(downloads or str(Path.home())) / nome)
+        caminho, _ = QFileDialog.getSaveFileName(
+            None,
+            "Salvar diagnóstico para suporte",
+            sugerido,
+            "Diagnóstico do Prontu (*.txt)",
+        )
+        if not caminho:
+            return
+        if not caminho.lower().endswith(".txt"):
+            caminho += ".txt"
+
+        screens = []
+        for screen in QGuiApplication.screens():
+            geometry = screen.geometry()
+            screens.append(
+                {
+                    "width": geometry.width(),
+                    "height": geometry.height(),
+                    "scale": screen.devicePixelRatio(),
+                    "dpi": screen.logicalDotsPerInch(),
+                }
+            )
+
+        version = QCoreApplication.applicationVersion() or "desconhecida"
+        storage = getattr(self._database, "_secure_storage", None)
+        backend = str(getattr(storage, "backend", "desconhecido"))
+        supabase_url = str(getattr(self._database, "supabase_url", "") or "")
+        supabase_key = str(getattr(self._database, "supabase_key", "") or "")
+
+        def gerar():
+            connectivity = check_connectivity(supabase_url, supabase_key)
+            return export_support_diagnostic(
+                caminho,
+                version=version,
+                secure_storage_backend=backend,
+                connectivity=connectivity,
+                screens=screens,
+                technical_events=recent_technical_events(),
+            )
+
+        self._enviar("diagnostico", gerar)
+
+    @Slot()
     def carregarAuditoria(self) -> None:
         if not self.proprietario:
             self.feedback.emit(
@@ -365,3 +431,10 @@ class ConfiguracoesController(QObject):
             )
             self._franquia_lembretes = str(dados.get("franquia") or "")
             self.estadoAlterado.emit()
+            return
+        if operacao == "diagnostico":
+            self.feedback.emit(
+                "success",
+                "Diagnóstico gerado com segurança. Arquivo salvo em:\n"
+                f"{resultado}",
+            )

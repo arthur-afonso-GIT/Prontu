@@ -22,6 +22,7 @@ Item {
         function carregar() {}
         function salvarPerfil(_nome) {}
         function abrirDiagnostico() {}
+        function gerarDiagnosticoSuporte() {}
         function salvarMensagens(_manual, _lembrete) {}
         function carregarLembretes() {}
         function escolherPastaBackup() { return "" }
@@ -236,13 +237,32 @@ Item {
                         Label {
                             Layout.fillWidth: true
                             wrapMode: Text.WordWrap
-                            text: "O diagnóstico contém apenas registros técnicos locais para ajudar a identificar falhas."
+                            text: "Gere um arquivo pronto para enviar ao suporte. Ele verifica versão, sistema, telas, espaço em disco, armazenamento local e conexão."
                             color: "#64748b"
                             font.pixelSize: 12
                         }
-                        AppButton {
-                            text: "Abrir pasta de diagnóstico"
-                            onClicked: page.controller.abrirDiagnostico()
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            text: "O arquivo não inclui pacientes, fichas, anexos, dados financeiros, senhas, tokens ou chaves de ativação."
+                            color: "#137548"
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 10
+                            AppButton {
+                                text: "Gerar diagnóstico para suporte"
+                                enabled: !page.controller.ocupado
+                                onClicked: page.controller.gerarDiagnosticoSuporte()
+                            }
+                            AppButton {
+                                text: "Abrir logs técnicos"
+                                variant: "ghost"
+                                onClicked: page.controller.abrirDiagnostico()
+                            }
+                            Item { Layout.fillWidth: true }
                         }
 
                         Item { Layout.fillHeight: true }
