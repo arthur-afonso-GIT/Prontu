@@ -1,4 +1,4 @@
-# Prontu
+<img width="1913" height="1004" alt="63dfd3c3-2e2f-460c-9ac4-1d606d83b584" src="https://github.com/user-attachments/assets/872cbe7d-f266-4aec-ba91-9120a36ef21a" /><img width="1917" height="1005" alt="a87edb14-2a67-4360-b567-ee9d1549b76e" src="https://github.com/user-attachments/assets/ddad6e9a-6545-44b8-b7a3-c8a09559b6b2" /># Prontu
 
 <p align="center">
   <img src="ui/assets/prontu_logo.png" alt="Prontu logo" width="120">
@@ -56,19 +56,39 @@ These guides are designed for end users and do not require knowledge of Python, 
 
 ### Dashboard
 
-![Prontu dashboard](docs/screenshots/dashboard.png)
+![Prontu dashboard]<img width="1424" height="752" alt="Gemini_Generated_Image_qyiuu6qyiuu6qyiu" src="https://github.com/user-attachments/assets/3cb600c5-d659-4c42-845e-6969b52e29b3" />
+
 
 ### Patient management
 
-![Prontu patient management](docs/screenshots/clinical-records.png)
+![Prontu patient management]<img width="768" height="403" alt="08acfbf8-0346-47e2-ad0d-60167af0631e" src="https://github.com/user-attachments/assets/2700d124-c202-453d-93b0-5ee1885bf021" />
+
 
 ### Appointment scheduling
 
-![Prontu appointment scheduling](docs/screenshots/appointment-scheduling.png)
+![Prontu appointment scheduling]<img width="1917" height="1005" alt="a87edb14-2a67-4360-b567-ee9d1549b76e" src="https://github.com/user-attachments/assets/b5709149-28a2-4791-9944-bd90ad60c6f1" />
+
 
 ### Financial tracking
 
-![Prontu financial tracking](docs/screenshots/financial-tracking.png)
+![Prontu financial tracking]<img width="1913" height="1004" alt="63dfd3c3-2e2f-460c-9ac4-1d606d83b584" src="https://github.com/user-attachments/assets/cbcf6d61-08b0-43b9-b9c9-ecb5a7a38d98" />
+
+### Clinical Records
+
+<img width="1913" height="1004" alt="935c2e81-df68-435b-b02d-10e726050d64" src="https://github.com/user-attachments/assets/132cb7e1-5900-4cfd-918d-e9d78e5c93a6" />
+
+
+### Config
+
+<img width="1424" height="747" alt="Gemini_Generated_Image_whh283whh283whh2" src="https://github.com/user-attachments/assets/4bf855ac-913d-4538-9aa9-10c6e5dc11d8" />
+
+
+### Team management
+
+<img width="1424" height="747" alt="Gemini_Generated_Image_whh283whh283whh2" src="https://github.com/user-attachments/assets/9616c76d-c98c-4b07-aee4-b9d7c4192b46" />
+
+
+
 
 ## Technology stack
 
